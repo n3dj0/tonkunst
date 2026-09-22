@@ -4,12 +4,13 @@ import SwiftUI
 
 @MainActor
 final class MusicStore: NSObject, ObservableObject {
-    @Published var profile: ServerProfile? = KeychainStore.load()
+    @Published var profile: ServerProfile?
     @Published var tracks: [MediaTrack] = []
     @Published var currentTrack: MediaTrack?
     @Published var isPlaying = false
     @Published var connectionAvailable = false
     @Published var isLoading = false
+    @Published private(set) var isRestoringSession = true
     @Published var errorMessage: String?
     @Published var repeatMode: RepeatMode = .off
     @Published var isShuffled = false
@@ -22,15 +23,38 @@ final class MusicStore: NSObject, ObservableObject {
     private let audioSessionQueue = DispatchQueue(label: "com.tonkunst.audio-session", qos: .userInitiated)
     private var player: AVPlayer?
     private var timeObserver: Any?
+    private var itemStatusObservation: NSKeyValueObservation?
+    private var timeControlStatusObservation: NSKeyValueObservation?
+    private var didFinishObserver: NSObjectProtocol?
+    private var didFailToFinishObserver: NSObjectProtocol?
+    private var isUsingFallbackStream = false
+    private var canUseFallbackStream = false
 
     override init() {
         super.init()
-        configureAudio()
-        configureRemoteControls()
-        if profile != nil { Task { await refresh() } }
+        Task { [weak self] in
+            // Let SwiftUI present its first frame before doing any work that can
+            // involve system services (notably Keychain and MediaPlayer).
+            await Task.yield()
+            guard let self else { return }
+
+            configureRemoteControls()
+            profile = await Task.detached(priority: .userInitiated) {
+                KeychainStore.load()
+            }.value
+            isRestoringSession = false
+
+            if profile != nil {
+                await refresh()
+            }
+        }
     }
 
-    deinit { if let timeObserver { player?.removeTimeObserver(timeObserver) } }
+    deinit {
+        if let timeObserver { player?.removeTimeObserver(timeObserver) }
+        if let didFinishObserver { NotificationCenter.default.removeObserver(didFinishObserver) }
+        if let didFailToFinishObserver { NotificationCenter.default.removeObserver(didFailToFinishObserver) }
+    }
 
     var offlineTracks: [MediaTrack] { tracks.filter { offline.contains($0) } }
     var listenStatus: String { connectionAvailable ? "Connected to Jellyfin" : (offlineTracks.isEmpty ? "Jellyfin unavailable" : "Offline listening") }
@@ -67,17 +91,14 @@ final class MusicStore: NSObject, ObservableObject {
     func signOut() { stop(); profile = nil; tracks = []; connectionAvailable = false; KeychainStore.remove() }
 
     func play(_ track: MediaTrack) {
-        guard let source = offline.localURL(for: track) ?? (connectionAvailable ? track.streamURL : nil) else { errorMessage = "This song is not downloaded and Jellyfin is unavailable."; return }
+        let localSource = offline.localURL(for: track)
+        guard let source = localSource ?? (connectionAvailable ? track.streamURL : nil) else { errorMessage = "This song is not downloaded and Jellyfin is unavailable."; return }
         if currentTrack?.id == track.id { togglePlay(); return }
         stopPlayerOnly()
         currentTrack = track; progress = 0; playbackDuration = track.duration
-        player = AVPlayer(url: source)
-        observePlayer()
-        activateAudioSession { [weak self] in
-            self?.player?.play()
-            self?.isPlaying = true
-            self?.updateNowPlaying()
-        }
+        isUsingFallbackStream = false
+        canUseFallbackStream = localSource == nil
+        startPlayer(source: source, for: track)
     }
 
     func togglePlay() {
@@ -87,10 +108,17 @@ final class MusicStore: NSObject, ObservableObject {
             isPlaying = false
             updateNowPlaying()
         } else {
-            activateAudioSession { [weak self] in
-                self?.player?.play()
-                self?.isPlaying = true
-                self?.updateNowPlaying()
+            activateAudioSession { [weak self] result in
+                guard let self else { return }
+                switch result {
+                case .success:
+                    self.player?.play()
+                    self.isPlaying = true
+                    self.updateNowPlaying()
+                case .failure(let error):
+                    self.isPlaying = false
+                    self.errorMessage = "Audio could not start: \(error.localizedDescription)"
+                }
             }
         }
     }
@@ -113,24 +141,94 @@ final class MusicStore: NSObject, ObservableObject {
         else { do { try await offline.download(track); tracks = tracks.map { var value = $0; value.isDownloaded = offline.contains(value); return value } } catch { errorMessage = "Download failed: \(error.localizedDescription)" } }
     }
 
-    private func observePlayer() {
-        guard let player else { return }
-        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] time in
-            Task { @MainActor in self?.progress = time.seconds.isFinite ? time.seconds : 0; self?.updateNowPlaying() }
-        }
-        NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: .main) { [weak self] _ in Task { @MainActor in if self?.repeatMode == .one { self?.seek(to: 0); self?.player?.play() } else { self?.next() } } }
-    }
-    private func stopPlayerOnly() { if let timeObserver { player?.removeTimeObserver(timeObserver); self.timeObserver = nil }; player?.pause(); player = nil }
-    private func configureAudio() {
-        audioSessionQueue.async {
-            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+    private func startPlayer(source: URL, for track: MediaTrack) {
+        let player = AVPlayer(url: source)
+        self.player = player
+        observePlayer(player, trackID: track.id)
+        activateAudioSession { [weak self, weak player] result in
+            guard let self, let player, self.player === player else { return }
+            switch result {
+            case .success:
+                player.play()
+                self.isPlaying = true
+                self.updateNowPlaying()
+            case .failure(let error):
+                self.isPlaying = false
+                self.errorMessage = "Audio could not start: \(error.localizedDescription)"
+            }
         }
     }
 
-    private func activateAudioSession(completion: @escaping @MainActor () -> Void) {
+    private func observePlayer(_ player: AVPlayer, trackID: String) {
+        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] time in
+            Task { @MainActor in self?.progress = time.seconds.isFinite ? time.seconds : 0; self?.updateNowPlaying() }
+        }
+        itemStatusObservation = player.currentItem?.observe(\.status, options: [.initial, .new]) { [weak self, weak player] item, _ in
+            Task { @MainActor in
+                guard let self, let player, self.player === player else { return }
+                self.handleItemStatus(item.status, error: item.error, trackID: trackID)
+            }
+        }
+        timeControlStatusObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self, weak player] observedPlayer, _ in
+            Task { @MainActor in
+                guard let self, let player, self.player === player else { return }
+                self.isPlaying = observedPlayer.timeControlStatus != .paused
+            }
+        }
+        didFinishObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.player === player else { return }
+                if self.repeatMode == .one { self.seek(to: 0); self.player?.play() } else { self.next() }
+            }
+        }
+        didFailToFinishObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemFailedToPlayToEndTime, object: player.currentItem, queue: .main) { [weak self] notification in
+            let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+            Task { @MainActor in
+                guard let self, self.player === player else { return }
+                self.handlePlaybackFailure(error, trackID: trackID)
+            }
+        }
+    }
+
+    private func handleItemStatus(_ status: AVPlayerItem.Status, error: Error?, trackID: String) {
+        if status == .failed { handlePlaybackFailure(error, trackID: trackID) }
+    }
+
+    private func handlePlaybackFailure(_ error: Error?, trackID: String) {
+        guard currentTrack?.id == trackID else { return }
+        isPlaying = false
+        if canUseFallbackStream, !isUsingFallbackStream, let fallbackURL = currentTrack?.fallbackStreamURL {
+            isUsingFallbackStream = true
+            stopPlayerOnly()
+            startPlayer(source: fallbackURL, for: currentTrack!)
+            return
+        }
+        errorMessage = "This song could not be played\(error.map { ": \($0.localizedDescription)" } ?? ".")"
+    }
+
+    private func stopPlayerOnly() {
+        if let timeObserver { player?.removeTimeObserver(timeObserver) }
+        timeObserver = nil
+        itemStatusObservation = nil
+        timeControlStatusObservation = nil
+        if let didFinishObserver { NotificationCenter.default.removeObserver(didFinishObserver) }
+        if let didFailToFinishObserver { NotificationCenter.default.removeObserver(didFailToFinishObserver) }
+        didFinishObserver = nil
+        didFailToFinishObserver = nil
+        player?.pause()
+        player = nil
+    }
+
+    private func activateAudioSession(completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
         audioSessionQueue.async {
-            try? AVAudioSession.sharedInstance().setActive(true)
-            Task { @MainActor in completion() }
+            do {
+                let session = AVAudioSession.sharedInstance()
+                try session.setCategory(.playback, mode: .default)
+                try session.setActive(true)
+                Task { @MainActor in completion(.success(())) }
+            } catch {
+                Task { @MainActor in completion(.failure(error)) }
+            }
         }
     }
 

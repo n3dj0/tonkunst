@@ -3,10 +3,12 @@ import SwiftUI
 struct Artwork: View {
     let track: MediaTrack?
     var size: CGFloat = 52
+    private let cornerRadius: CGFloat = 12
+
     var body: some View {
         Group { if let url = track?.artworkURL { AsyncImage(url: url) { image in image.resizable().scaledToFill() } placeholder: { artworkFallback } } else { artworkFallback } }
             .frame(width: size, height: size)
-            .clipShape(Rectangle())
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
     private var artworkFallback: some View { Image("AppArtwork").resizable().scaledToFill() }
 }

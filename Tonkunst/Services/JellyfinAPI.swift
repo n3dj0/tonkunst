@@ -73,17 +73,51 @@ struct JellyfinAPI {
         return responseBody.Items.map { item in
             let art = URL(string: "\(profile.baseURL)/Items/\(item.Id)/Images/Primary?maxWidth=480&quality=90&api_key=\(profile.accessToken)")
             // Universal audio lets Jellyfin direct-play compatible files and transcode
-            // unsupported containers/codecs (notably Opus) to iOS-friendly AAC/M4A.
+            // unsupported containers/codecs (notably Opus) to an iOS-friendly HLS/AAC
+            // stream. DeviceId and the playback session are required by Jellyfin's
+            // transcoding pipeline on many server versions.
             var universal = URLComponents(url: base.appendingPathComponent("Audio/\(item.Id)/universal"), resolvingAgainstBaseURL: false)!
             universal.queryItems = [
                 URLQueryItem(name: "UserId", value: profile.userID),
-                URLQueryItem(name: "Container", value: "mp4"),
+                URLQueryItem(name: "DeviceId", value: deviceID),
+                URLQueryItem(name: "PlaySessionId", value: UUID().uuidString),
+                URLQueryItem(name: "Container", value: "mp4,m4a,mp3,aac,flac"),
+                URLQueryItem(name: "TranscodingContainer", value: "ts"),
+                URLQueryItem(name: "TranscodingProtocol", value: "hls"),
                 URLQueryItem(name: "AudioCodec", value: "aac"),
-                URLQueryItem(name: "MaxStreamingBitrate", value: "320000"),
+                URLQueryItem(name: "MaxAudioChannels", value: "2"),
+                URLQueryItem(name: "MaxStreamingBitrate", value: "3200000"),
                 URLQueryItem(name: "api_key", value: profile.accessToken)
             ]
-            return MediaTrack(id: item.Id, title: item.Name, artist: item.AlbumArtist ?? item.Artists?.first ?? "Unknown Artist", album: item.Album ?? "Unknown Album", duration: Double(item.RunTimeTicks ?? 0) / 10_000_000, artworkURL: art, streamURL: universal.url, fileExtension: "m4a", isFavorite: item.UserData?.IsFavorite ?? false)
+            var direct = URLComponents(url: base.appendingPathComponent("Audio/\(item.Id)/stream"), resolvingAgainstBaseURL: false)!
+            direct.queryItems = [
+                URLQueryItem(name: "UserId", value: profile.userID),
+                URLQueryItem(name: "DeviceId", value: deviceID),
+                URLQueryItem(name: "Static", value: "true"),
+                URLQueryItem(name: "api_key", value: profile.accessToken)
+            ]
+            return MediaTrack(
+                id: item.Id,
+                title: metadataValue([item.Name], placeholder: "Unknown Song"),
+                artist: metadataValue([item.AlbumArtist] + (item.Artists ?? []).map { Optional($0) }, placeholder: "Unknown Artist"),
+                album: metadataValue([item.Album], placeholder: "Unknown Album"),
+                duration: Double(item.RunTimeTicks ?? 0) / 10_000_000,
+                artworkURL: art,
+                streamURL: universal.url,
+                fallbackStreamURL: direct.url,
+                fileExtension: "m4a",
+                isFavorite: item.UserData?.IsFavorite ?? false
+            )
         }
+    }
+
+    /// Jellyfin can provide an empty tag rather than omit it. Treat either form
+    /// as missing so no user-facing metadata label is blank.
+    private func metadataValue(_ values: [String?], placeholder: String) -> String {
+        values.lazy.compactMap { value in
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed?.isEmpty == false ? trimmed : nil
+        }.first ?? placeholder
     }
 
     private func authHeader(token: String?) -> String {

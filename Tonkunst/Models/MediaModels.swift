@@ -1,6 +1,6 @@
 import Foundation
 
-struct ServerProfile: Codable, Equatable {
+struct ServerProfile: Codable, Equatable, Sendable {
     var baseURL: String
     var userID: String
     var accessToken: String
@@ -32,6 +32,7 @@ struct MediaTrack: Identifiable, Codable, Hashable {
     var duration: TimeInterval
     var artworkURL: URL?
     var streamURL: URL?
+    var fallbackStreamURL: URL?
     var fileExtension: String
     var isFavorite: Bool = false
     var isDownloaded: Bool = false

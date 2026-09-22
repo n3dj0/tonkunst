@@ -43,6 +43,7 @@ struct NowPlayingView: View {
                             Text(track.artist).foregroundStyle(.secondary)
                             Text(track.album).font(.subheadline).foregroundStyle(.tertiary)
                         }
+                        .padding(.horizontal, 26)
                         VStack(spacing: 7) {
                             Slider(value: Binding(get: { store.progress }, set: { store.seek(to: $0) }), in: 0...max(store.playbackDuration, 1))
                             HStack {
@@ -50,6 +51,7 @@ struct NowPlayingView: View {
                                 Text("-\(time(max(0, store.playbackDuration - store.progress)))")
                             }.font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                         }
+                        .padding(.horizontal, 26)
                         HStack(spacing: 16) {
                             Button { store.isShuffled.toggle() } label: { Image(systemName: "shuffle").foregroundStyle(store.isShuffled ? Color.accentColor : .primary) }
                                 .accessibilityLabel("Shuffle")
