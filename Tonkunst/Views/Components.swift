@@ -27,5 +27,27 @@ struct SongRow: View {
 
 struct ConnectionPill: View {
     @EnvironmentObject private var store: MusicStore
-    var body: some View { Label(store.listenStatus, systemImage: store.connectionAvailable ? "checkmark.circle.fill" : "iphone.gen3").font(.caption.weight(.medium)).foregroundStyle(store.connectionAvailable ? .green : .orange).padding(.horizontal, 10).padding(.vertical, 6).background(.thinMaterial, in: Capsule()) }
+
+    private var willDisconnect: Bool {
+        store.connectionEnabled && (store.connectionAvailable || store.isConnecting)
+    }
+
+    private var statusLabel: some View {
+        Label(store.listenStatus, systemImage: store.isConnecting ? "arrow.clockwise" : (store.connectionAvailable ? "checkmark.circle.fill" : "iphone.gen3"))
+            .font(.caption.weight(.medium))
+            .foregroundStyle(store.connectionAvailable ? .green : .orange)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.thinMaterial, in: Capsule())
+    }
+
+    var body: some View {
+        if store.profile != nil {
+            Button { store.toggleConnection() } label: { statusLabel }
+                .buttonStyle(.plain)
+                .accessibilityLabel(willDisconnect ? "Disconnect from Jellyfin" : "Connect to Jellyfin")
+        } else {
+            statusLabel
+        }
+    }
 }

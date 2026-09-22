@@ -11,6 +11,8 @@ final class MusicStore: NSObject, ObservableObject {
     @Published var currentTrack: MediaTrack?
     @Published var isPlaying = false
     @Published var connectionAvailable = false
+    @Published private(set) var connectionEnabled = true
+    @Published private(set) var isConnecting = false
     @Published var isLoading = false
     @Published private(set) var isRestoringSession = true
     @Published var errorMessage: String?
@@ -35,6 +37,8 @@ final class MusicStore: NSObject, ObservableObject {
     private var serverHealthTask: Task<Void, Never>?
     private var isUsingFallbackStream = false
     private var canUseFallbackStream = false
+    private var connectionGeneration = 0
+    private static let connectionEnabledKey = "tonkunst.connectionEnabled"
 
     override init() {
         super.init()
@@ -52,12 +56,13 @@ final class MusicStore: NSObject, ObservableObject {
             case .success(let session):
                 savedProfiles = session.profiles
                 profile = session.active
+                connectionEnabled = UserDefaults.standard.object(forKey: Self.connectionEnabledKey) as? Bool ?? true
             case .failure(let error):
                 errorMessage = error.localizedDescription
             }
             isRestoringSession = false
 
-            if profile != nil {
+            if profile != nil && connectionEnabled {
                 await refresh()
                 startConnectionMonitoring()
             }
@@ -76,13 +81,20 @@ final class MusicStore: NSObject, ObservableObject {
         let visibleIDs = Set(tracks.map(\.id))
         return tracks.filter { offline.contains($0) } + offline.tracks.filter { !visibleIDs.contains($0.id) }
     }
-    var listenStatus: String { connectionAvailable ? "Connected to Jellyfin" : (offlineTracks.isEmpty ? "Jellyfin unavailable" : "Offline listening") }
+    var listenStatus: String {
+        if profile != nil && !connectionEnabled { return "Disconnected from Jellyfin" }
+        if isConnecting { return "Connecting to Jellyfin…" }
+        return connectionAvailable ? "Connected to Jellyfin" : (offlineTracks.isEmpty ? "Jellyfin unavailable" : "Offline listening")
+    }
 
     func signIn(server: String, username: String, password: String) async {
         isLoading = true; errorMessage = nil
         do {
             let authenticatedProfile = try await api.authenticate(server: server, username: username, password: password)
             savedProfiles = try KeychainStore.save(authenticatedProfile)
+            connectionGeneration += 1
+            connectionEnabled = true
+            UserDefaults.standard.set(true, forKey: Self.connectionEnabledKey)
             profile = authenticatedProfile
             await refresh()
             startConnectionMonitoring()
@@ -95,13 +107,14 @@ final class MusicStore: NSObject, ObservableObject {
     }
 
     func refresh() async {
-        guard let profile else { return }
+        guard let profile, connectionEnabled else { return }
+        let generation = connectionGeneration
         isLoading = true
         errorMessage = nil
-        defer { isLoading = false }
+        defer { if connectionGeneration == generation { isLoading = false } }
         do {
             let fetchedTracks = try await api.fetchSongs(profile: profile)
-            guard self.profile == profile else { return }
+            guard self.profile == profile, connectionEnabled, connectionGeneration == generation else { return }
             offline.reconcile(with: fetchedTracks)
             tracks = fetchedTracks.map { item in
                 var item = item
@@ -110,7 +123,7 @@ final class MusicStore: NSObject, ObservableObject {
             }
             connectionAvailable = true
         } catch {
-            guard self.profile == profile else { return }
+            guard self.profile == profile, connectionEnabled, connectionGeneration == generation else { return }
             connectionAvailable = false
             errorMessage = error.localizedDescription
         }
@@ -120,6 +133,10 @@ final class MusicStore: NSObject, ObservableObject {
         guard let savedProfile = savedProfiles.first(where: { $0.id == savedProfile.id }) else { return }
         stop()
         serverHealthTask?.cancel()
+        connectionGeneration += 1
+        connectionEnabled = true
+        isConnecting = false
+        UserDefaults.standard.set(true, forKey: Self.connectionEnabledKey)
         KeychainStore.activate(savedProfile)
         profile = savedProfile
         tracks = []
@@ -127,8 +144,38 @@ final class MusicStore: NSObject, ObservableObject {
         errorMessage = nil
         Task {
             await refresh()
-            guard profile == savedProfile else { return }
+            guard profile == savedProfile, connectionEnabled else { return }
             startConnectionMonitoring()
+        }
+    }
+
+    func toggleConnection() {
+        guard let profile else { return }
+
+        if connectionEnabled && (connectionAvailable || isConnecting) {
+            connectionGeneration += 1
+            connectionEnabled = false
+            isConnecting = false
+            UserDefaults.standard.set(false, forKey: Self.connectionEnabledKey)
+            serverHealthTask?.cancel()
+            serverHealthTask = nil
+            connectionAvailable = false
+            isLoading = false
+            if canUseFallbackStream && currentTrack != nil { stop() }
+        } else {
+            connectionGeneration += 1
+            connectionEnabled = true
+            isConnecting = true
+            connectionAvailable = false
+            UserDefaults.standard.set(true, forKey: Self.connectionEnabledKey)
+            let generation = connectionGeneration
+            serverHealthTask?.cancel()
+            Task {
+                await refresh()
+                guard self.profile == profile, connectionEnabled, connectionGeneration == generation else { return }
+                isConnecting = false
+                startConnectionMonitoring()
+            }
         }
     }
 
@@ -144,6 +191,10 @@ final class MusicStore: NSObject, ObservableObject {
     func signOut() {
         stop()
         serverHealthTask?.cancel()
+        connectionGeneration += 1
+        connectionEnabled = true
+        isConnecting = false
+        UserDefaults.standard.set(true, forKey: Self.connectionEnabledKey)
         KeychainStore.signOut()
         profile = nil; tracks = []; connectionAvailable = false; errorMessage = nil
     }
@@ -199,7 +250,14 @@ final class MusicStore: NSObject, ObservableObject {
             offline.remove(track)
             tracks = tracks.map { var value = $0; value.isDownloaded = offline.contains(value); return value }
         }
-        else { do { try await offline.download(track); tracks = tracks.map { var value = $0; value.isDownloaded = offline.contains(value); return value } } catch { errorMessage = "Download failed: \(error.localizedDescription)" } }
+        else {
+            guard connectionEnabled && connectionAvailable else {
+                errorMessage = "Connect to Jellyfin to download songs."
+                return
+            }
+            do { try await offline.download(track); tracks = tracks.map { var value = $0; value.isDownloaded = offline.contains(value); return value } }
+            catch { errorMessage = "Download failed: \(error.localizedDescription)" }
+        }
     }
 
     private func startPlayer(source: URL, for track: MediaTrack) {
@@ -282,6 +340,8 @@ final class MusicStore: NSObject, ObservableObject {
     }
 
     private func startConnectionMonitoring() {
+        guard connectionEnabled else { return }
+        let generation = connectionGeneration
         if !isMonitoringNetwork {
             pathMonitor.pathUpdateHandler = { [weak self] path in
                 Task { @MainActor in
@@ -299,10 +359,10 @@ final class MusicStore: NSObject, ObservableObject {
                 guard let self, let profile = self.profile else { return }
                 do {
                     try await self.api.ping(profile: profile)
-                    guard !Task.isCancelled, self.profile == profile else { return }
+                    guard !Task.isCancelled, self.profile == profile, self.connectionEnabled, self.connectionGeneration == generation else { return }
                     self.connectionAvailable = true
                 } catch {
-                    guard !Task.isCancelled, self.profile == profile else { return }
+                    guard !Task.isCancelled, self.profile == profile, self.connectionEnabled, self.connectionGeneration == generation else { return }
                     self.connectionAvailable = false
                 }
                 try? await Task.sleep(for: .seconds(10))

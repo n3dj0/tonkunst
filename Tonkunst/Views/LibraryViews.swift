@@ -61,12 +61,38 @@ private extension View {
             }
         }
     }
+
+    @ViewBuilder
+    func pullToSearch(
+        isRevealed: Bool,
+        text: Binding<String>,
+        prompt: String
+    ) -> some View {
+        if isRevealed {
+            searchable(text: text, placement: .toolbar, prompt: prompt)
+        } else {
+            self
+        }
+    }
+
+    /// SwiftUI can leave a searchable drawer open on a newly mounted list.
+    /// Add it only after the user pulls past the list's top edge.
+    func revealSearchOnPull(_ isRevealed: Binding<Bool>) -> some View {
+        onScrollGeometryChange(for: CGFloat.self) { geometry in
+            geometry.contentOffset.y + geometry.contentInsets.top
+        } action: { _, offset in
+            if offset < -20 {
+                isRevealed.wrappedValue = true
+            }
+        }
+    }
 }
 
 private struct TonkunstBrand: View {
     var body: some View {
         Text("Tonkunst")
-            .font(.system(size: 24, weight: .regular, design: .serif))
+            .font(.system(size: 27, weight: .regular, design: .serif))
+            .tracking(-0.8)
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
             .accessibilityLabel("Tonkunst")
@@ -83,8 +109,56 @@ struct SongsView: View {
     @Binding var showAccount: Bool
     @State private var filter = ""
     @State private var isBrandVisible = true
+    @State private var isSearchRevealed = false
     private var songs: [MediaTrack] { filter.isEmpty ? store.tracks : store.tracks.filter { $0.matches(filter) } }
-    var body: some View { NavigationStack { Group { if store.isRestoringSession { ProgressView("Opening Tonkunst…") } else if store.profile == nil { WelcomeView(showAccount: $showAccount) } else if store.isLoading && store.tracks.isEmpty { ProgressView("Loading your music…") } else if songs.isEmpty { if filter.isEmpty { ContentUnavailableView("No Songs Yet", systemImage: "music.note", description: Text(store.connectionAvailable ? "Your Jellyfin music library is empty." : "Connect to Jellyfin to browse your music.")) } else { ContentUnavailableView.search(text: filter) } } else { List(songs) { SongRow(track: $0) }.listStyle(.plain).tonkunstBrandVisibility($isBrandVisible).refreshable { await store.refresh() } } }.navigationTitle("Songs").searchable(text: $filter, prompt: "Songs, artists, albums").toolbar { ToolbarItem(placement: .topBarLeading) { if isBrandVisible { TonkunstBrand() } }.sharedBackgroundVisibility(.hidden); ToolbarItemGroup(placement: .topBarTrailing) { ConnectionPill(); AccountButton(showAccount: $showAccount) } } } }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if store.isRestoringSession {
+                    ProgressView("Opening Tonkunst…")
+                } else if store.profile == nil {
+                    WelcomeView(showAccount: $showAccount)
+                } else if store.isLoading && store.tracks.isEmpty {
+                    ProgressView("Loading your music…")
+                } else {
+                    List(songs) { SongRow(track: $0) }
+                        .listStyle(.plain)
+                        .tonkunstBrandVisibility($isBrandVisible)
+                        .refreshable { await store.refresh() }
+                        .overlay {
+                            if songs.isEmpty {
+                                if filter.isEmpty {
+                                    ContentUnavailableView(
+                                        "No Songs Yet",
+                                        systemImage: "music.note",
+                                        description: Text(store.connectionAvailable
+                                            ? "Your Jellyfin music library is empty."
+                                            : "Connect to Jellyfin to browse your music.")
+                                    )
+                                } else {
+                                    ContentUnavailableView.search(text: filter)
+                                }
+                            }
+                        }
+                        .revealSearchOnPull($isSearchRevealed)
+                        .pullToSearch(isRevealed: isSearchRevealed, text: $filter, prompt: "Songs, artists, albums")
+                }
+            }
+            .navigationTitle(isBrandVisible ? "" : "Songs")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if isBrandVisible { TonkunstBrand() }
+                }
+                .sharedBackgroundVisibility(.hidden)
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    ConnectionPill()
+                    AccountButton(showAccount: $showAccount)
+                }
+            }
+        }
+    }
 }
 
 struct ArtistsView: View {
@@ -92,6 +166,7 @@ struct ArtistsView: View {
     @Binding var showAccount: Bool
     @State private var filter = ""
     @State private var isBrandVisible = true
+    @State private var isSearchRevealed = false
 
     private var artists: [(name: String, tracks: [MediaTrack])] {
         Dictionary(grouping: store.tracks, by: \.artist)
@@ -126,6 +201,7 @@ struct ArtistsView: View {
             }
             .listStyle(.plain)
             .tonkunstBrandVisibility($isBrandVisible)
+            .revealSearchOnPull($isSearchRevealed)
             .overlay {
                 if artists.isEmpty {
                     if filter.isEmpty {
@@ -135,8 +211,9 @@ struct ArtistsView: View {
                     }
                 }
             }
-            .navigationTitle("Artists")
-            .searchable(text: $filter, prompt: "Search artists")
+            .navigationTitle(isBrandVisible ? "" : "Artists")
+            .navigationBarTitleDisplayMode(.inline)
+            .pullToSearch(isRevealed: isSearchRevealed, text: $filter, prompt: "Search artists")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if isBrandVisible { TonkunstBrand() }
@@ -155,6 +232,7 @@ private struct ArtistTracksView: View {
     let artist: String
     let tracks: [MediaTrack]
     @State private var filter = ""
+    @State private var isSearchRevealed = false
 
     private var filteredTracks: [MediaTrack] {
         filter.isEmpty ? tracks : tracks.filter { $0.matches(filter) }
@@ -167,16 +245,18 @@ private struct ArtistTracksView: View {
             } else {
                 List(filteredTracks) { SongRow(track: $0) }
                     .listStyle(.plain)
+                    .revealSearchOnPull($isSearchRevealed)
             }
         }
         .navigationTitle(artist)
-        .searchable(text: $filter, prompt: "Songs, albums")
+        .navigationBarTitleDisplayMode(.inline)
+        .pullToSearch(isRevealed: isSearchRevealed, text: $filter, prompt: "Songs, albums")
     }
 }
 
 struct PlaylistsView: View {
     @Binding var showAccount: Bool
-    var body: some View { NavigationStack { ContentUnavailableView("Your Playlists", systemImage: "music.note.list", description: Text("Jellyfin playlist sync will appear here as soon as playlists are added to your library.")).navigationTitle("Playlists").toolbar { ToolbarItem(placement: .topBarLeading) { TonkunstBrand() }.sharedBackgroundVisibility(.hidden); ToolbarItemGroup(placement: .topBarTrailing) { ConnectionPill(); AccountButton(showAccount: $showAccount) } } } }
+    var body: some View { NavigationStack { ContentUnavailableView("Your Playlists", systemImage: "music.note.list", description: Text("Jellyfin playlist sync will appear here as soon as playlists are added to your library.")).navigationTitle("").navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .topBarLeading) { TonkunstBrand() }.sharedBackgroundVisibility(.hidden); ToolbarItemGroup(placement: .topBarTrailing) { ConnectionPill(); AccountButton(showAccount: $showAccount) } } } }
 }
 
 struct OfflineView: View {
@@ -184,6 +264,7 @@ struct OfflineView: View {
     @Binding var showAccount: Bool
     @State private var filter = ""
     @State private var isBrandVisible = true
+    @State private var isSearchRevealed = false
 
     private var offlineTracks: [MediaTrack] {
         filter.isEmpty ? store.offlineTracks : store.offlineTracks.filter { $0.matches(filter) }
@@ -204,10 +285,12 @@ struct OfflineView: View {
                     List(offlineTracks) { SongRow(track: $0) }
                         .listStyle(.plain)
                         .tonkunstBrandVisibility($isBrandVisible)
+                        .revealSearchOnPull($isSearchRevealed)
                 }
             }
-            .navigationTitle("Offline")
-            .searchable(text: $filter, prompt: "Songs, artists, albums")
+            .navigationTitle(isBrandVisible ? "" : "Offline")
+            .navigationBarTitleDisplayMode(.inline)
+            .pullToSearch(isRevealed: isSearchRevealed, text: $filter, prompt: "Songs, artists, albums")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if isBrandVisible { TonkunstBrand() }
@@ -250,7 +333,8 @@ struct SearchView: View {
                         .tonkunstBrandVisibility($isBrandVisible)
                 }
             }
-            .navigationTitle("Search")
+            .navigationTitle(isBrandVisible ? "" : "Search")
+            .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query, prompt: "Search your collection")
             .searchFocused($isSearchFocused)
             .onAppear {
