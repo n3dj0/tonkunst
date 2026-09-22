@@ -105,7 +105,7 @@ struct JellyfinAPI {
                 artworkURL: art,
                 streamURL: universal.url,
                 fallbackStreamURL: direct.url,
-                fileExtension: item.Container?.lowercased() ?? "m4a",
+                fileExtension: audioFileExtension(for: item.Container),
                 isFavorite: item.UserData?.IsFavorite ?? false
             )
         }
@@ -131,6 +131,18 @@ struct JellyfinAPI {
             let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed?.isEmpty == false ? trimmed : nil
         }.first ?? placeholder
+    }
+
+    private func audioFileExtension(for container: String?) -> String {
+        let formats = Set((container ?? "").lowercased().split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+        // FFmpeg reports MP4 audio as "mov,mp4,m4a,3gp,3g2,mj2". That is a
+        // list of compatible format names, not a filename extension.
+        if !formats.isDisjoint(with: ["m4a", "mp4", "mov"]) { return "m4a" }
+        for format in ["mp3", "flac", "aac", "ogg", "opus", "wav", "aiff", "caf"] {
+            if formats.contains(format) { return format }
+        }
+        return "m4a"
     }
 
     private func authHeader(token: String?) -> String {

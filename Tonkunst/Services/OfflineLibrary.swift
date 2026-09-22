@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 @MainActor
@@ -30,17 +31,18 @@ final class OfflineLibrary: ObservableObject {
         // playlist as an audio file makes a download look complete but leaves it
         // unplayable as soon as the server is unavailable. Download the direct
         // audio resource instead.
-        guard let url = track.fallbackStreamURL ?? track.streamURL else { return }
-        let (temporaryURL, response) = try await URLSession.shared.download(from: url)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            try? FileManager.default.removeItem(at: temporaryURL)
-            throw JellyfinError.unavailable
+        guard let url = track.fallbackStreamURL ?? track.streamURL else { throw JellyfinError.badResponse }
+        let staged: (url: URL, fileExtension: String)
+        do {
+            staged = try await playableDownload(from: url, suggestedExtension: track.fileExtension)
+        } catch OfflineAudioError.unsupportedFormat {
+            guard let transcodedURL = transcodedMP3URL(from: track.fallbackStreamURL ?? url) else {
+                throw OfflineAudioError.unsupportedFormat
+            }
+            staged = try await playableDownload(from: transcodedURL, suggestedExtension: "mp3")
         }
-        guard !isHLSPlaylist(at: temporaryURL) else {
-            try? FileManager.default.removeItem(at: temporaryURL)
-            throw JellyfinError.badResponse
-        }
-        let destination = try destination(for: track, fileExtension: track.fileExtension)
+        let destination = try destination(for: track, fileExtension: staged.fileExtension)
+        defer { try? FileManager.default.removeItem(at: staged.url) }
         if FileManager.default.fileExists(atPath: destination.path) {
             // Keep a file the user may have placed in Files unless this track
             // already owns it.
@@ -49,14 +51,59 @@ final class OfflineLibrary: ObservableObject {
             }
             try FileManager.default.removeItem(at: destination)
         }
-        try FileManager.default.moveItem(at: temporaryURL, to: destination)
+        try FileManager.default.moveItem(at: staged.url, to: destination)
         if let previous = downloaded[track.id], previous != destination {
             try? FileManager.default.removeItem(at: previous)
             removeEmptyFolders(startingAt: previous.deletingLastPathComponent())
         }
         downloaded[track.id] = destination
-        savedTracks[track.id] = track
+        var savedTrack = track
+        savedTrack.fileExtension = staged.fileExtension
+        savedTracks[track.id] = savedTrack
         saveManifest()
+    }
+
+    private func playableDownload(from url: URL, suggestedExtension: String) async throws -> (url: URL, fileExtension: String) {
+        let (temporaryURL, response) = try await URLSession.shared.download(from: url)
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw JellyfinError.unavailable
+        }
+        guard !isHLSPlaylist(at: temporaryURL) else { throw OfflineAudioError.unsupportedFormat }
+        let knownExtensions: Set<String> = ["m4a", "mp3", "flac", "aac", "ogg", "opus", "wav", "aiff", "caf"]
+        let suggested = suggestedExtension.lowercased()
+        let ext = detectedAudioExtension(at: temporaryURL)
+            ?? (knownExtensions.contains(suggested) ? suggested : "m4a")
+        let stagedURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tonkunst-\(UUID().uuidString).\(ext)")
+        try FileManager.default.moveItem(at: temporaryURL, to: stagedURL)
+        do {
+            let asset = AVURLAsset(url: stagedURL)
+            guard try await asset.load(.isPlayable),
+                  try await !asset.loadTracks(withMediaType: .audio).isEmpty else {
+                throw OfflineAudioError.unsupportedFormat
+            }
+            return (stagedURL, ext)
+        } catch {
+            try? FileManager.default.removeItem(at: stagedURL)
+            throw OfflineAudioError.unsupportedFormat
+        }
+    }
+
+    private func transcodedMP3URL(from directURL: URL) -> URL? {
+        guard var components = URLComponents(url: directURL, resolvingAgainstBaseURL: false),
+              components.path.hasSuffix("/stream") else { return nil }
+        components.path += ".mp3"
+        components.queryItems = (components.queryItems ?? []).filter {
+            !["static", "container", "audiocodec", "audiobitrate", "maxaudiochannels"].contains($0.name.lowercased())
+        } + [
+            URLQueryItem(name: "Static", value: "false"),
+            URLQueryItem(name: "Container", value: "mp3"),
+            URLQueryItem(name: "AudioCodec", value: "mp3"),
+            URLQueryItem(name: "AudioBitRate", value: "320000"),
+            URLQueryItem(name: "MaxAudioChannels", value: "2")
+        ]
+        return components.url
     }
 
     func remove(_ track: MediaTrack) {
@@ -126,13 +173,43 @@ final class OfflineLibrary: ObservableObject {
         }
     }
 
+    private func repairedExtension(at url: URL) -> URL {
+        guard let detected = detectedAudioExtension(at: url), detected != url.pathExtension.lowercased() else { return url }
+        let destination = url.deletingPathExtension().appendingPathExtension(detected)
+        guard !FileManager.default.fileExists(atPath: destination.path) else { return url }
+        do {
+            try FileManager.default.moveItem(at: url, to: destination)
+            return destination
+        } catch {
+            return url
+        }
+    }
+
+    private func detectedAudioExtension(at url: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: 16) else { return nil }
+        let bytes = [UInt8](data)
+        if bytes.count >= 8, Array(bytes[4..<8]) == Array("ftyp".utf8) { return "m4a" }
+        if data.starts(with: Data("fLaC".utf8)) { return "flac" }
+        if data.starts(with: Data("OggS".utf8)) { return "ogg" }
+        if bytes.count >= 2, bytes[0] == 0xff, (bytes[1] & 0xf6) == 0xf0 { return "aac" }
+        if data.starts(with: Data("ID3".utf8)) || bytes.count >= 2 && bytes[0] == 0xff && (bytes[1] & 0xe0) == 0xe0 { return "mp3" }
+        if bytes.count >= 12, Array(bytes[0..<4]) == Array("RIFF".utf8), Array(bytes[8..<12]) == Array("WAVE".utf8) { return "wav" }
+        if data.starts(with: Data("caff".utf8)) { return "caf" }
+        if bytes.count >= 12, Array(bytes[0..<4]) == Array("FORM".utf8), Array(bytes[8..<12]) == Array("AIFF".utf8) { return "aiff" }
+        return nil
+    }
+
     func reconcile(with tracks: [MediaTrack]) {
         var changed = false
         for track in tracks where downloaded[track.id] != nil {
             guard let previous = downloaded[track.id] else { continue }
             let current = relocate(previous, track: track, id: track.id)
             if current != previous { downloaded[track.id] = current; changed = true }
-            if savedTracks[track.id] != track { savedTracks[track.id] = track; changed = true }
+            var savedTrack = track
+            savedTrack.fileExtension = current.pathExtension
+            if savedTracks[track.id] != savedTrack { savedTracks[track.id] = savedTrack; changed = true }
         }
         if changed { saveManifest() }
     }
@@ -168,9 +245,14 @@ final class OfflineLibrary: ObservableObject {
                 try? FileManager.default.removeItem(at: url)
                 return
             }
-            result[pair.key] = relocate(url, track: metadata[pair.key], id: pair.key)
+            result[pair.key] = relocate(repairedExtension(at: url), track: metadata[pair.key], id: pair.key)
         }
-        savedTracks = metadata.filter { downloaded[$0.key] != nil }
+        savedTracks = metadata.reduce(into: [:]) { result, pair in
+            guard let url = downloaded[pair.key] else { return }
+            var track = pair.value
+            track.fileExtension = url.pathExtension
+            result[pair.key] = track
+        }
         saveManifest()
     }
     private func saveManifest() {
@@ -190,5 +272,13 @@ final class OfflineLibrary: ObservableObject {
         guard let data = try? handle.read(upToCount: 32),
               let header = String(data: data, encoding: .utf8) else { return false }
         return header.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("#EXTM3U")
+    }
+}
+
+private enum OfflineAudioError: LocalizedError {
+    case unsupportedFormat
+
+    var errorDescription: String? {
+        "Jellyfin returned audio that this device cannot play offline."
     }
 }

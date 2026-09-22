@@ -27,5 +27,5 @@ struct SongRow: View {
 
 struct ConnectionPill: View {
     @EnvironmentObject private var store: MusicStore
-    var body: some View { Label(store.listenStatus, systemImage: store.connectionAvailable ? "wifi" : "iphone.gen3").font(.caption.weight(.medium)).foregroundStyle(store.connectionAvailable ? Color.accentColor : .orange).padding(.horizontal, 10).padding(.vertical, 6).background(.thinMaterial, in: Capsule()) }
+    var body: some View { Label(store.listenStatus, systemImage: store.connectionAvailable ? "link" : "iphone.gen3").font(.caption.weight(.medium)).foregroundStyle(store.connectionAvailable ? Color.accentColor : .orange).padding(.horizontal, 10).padding(.vertical, 6).background(.thinMaterial, in: Capsule()) }
 }

@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct AccountView: View {
+    private let iconColumnWidth: CGFloat = 52
+    private let iconSpacing: CGFloat = 14
+
     private enum JellyfinProtocol: String, CaseIterable, Identifiable {
         case http = "HTTP"
         case https = "HTTPS"
@@ -43,7 +46,7 @@ struct AccountView: View {
             .navigationTitle("Account & Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button("Done") { dismiss() }
                 }
             }
@@ -106,9 +109,9 @@ struct AccountView: View {
     @ViewBuilder
     private func signedInSettings(_ profile: ServerProfile) -> some View {
         Section("Jellyfin Account") {
-            HStack(spacing: 14) {
+            HStack(spacing: iconSpacing) {
                 ProfileAvatar(url: profile.avatarURL)
-                    .frame(width: 52, height: 52)
+                    .frame(width: iconColumnWidth, height: iconColumnWidth)
 
                 VStack(alignment: .leading) {
                     Text(profile.displayName)
@@ -119,18 +122,24 @@ struct AccountView: View {
                 }
             }
 
-            Label(
-                store.listenStatus,
-                systemImage: store.connectionAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
-            )
+            HStack(spacing: iconSpacing) {
+                Image(systemName: store.connectionAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .frame(width: iconColumnWidth)
+                Text(store.listenStatus)
+            }
             .foregroundStyle(store.connectionAvailable ? .green : .orange)
+            .accessibilityElement(children: .combine)
         }
 
         Section("Library") {
             Button {
                 Task { await store.refresh() }
             } label: {
-                Label("Refresh Library", systemImage: "arrow.clockwise")
+                HStack(spacing: iconSpacing) {
+                    Image(systemName: "arrow.clockwise")
+                        .frame(width: iconColumnWidth)
+                    Text("Refresh Library")
+                }
             }
 
             Text("Downloads appear in Files under On My iPhone → Tonkunst, arranged by artist and album. Remove individual downloads from the Offline tab.")
