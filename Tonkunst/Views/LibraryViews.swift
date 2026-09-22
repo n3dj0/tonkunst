@@ -84,7 +84,7 @@ struct SongsView: View {
     @State private var filter = ""
     @State private var isBrandVisible = true
     private var songs: [MediaTrack] { filter.isEmpty ? store.tracks : store.tracks.filter { $0.matches(filter) } }
-    var body: some View { NavigationStack { Group { if store.isRestoringSession { ProgressView("Opening Tonkunst…") } else if store.profile == nil { WelcomeView() } else if store.isLoading && store.tracks.isEmpty { ProgressView("Loading your music…") } else if songs.isEmpty { if filter.isEmpty { ContentUnavailableView("No Songs Yet", systemImage: "music.note", description: Text(store.connectionAvailable ? "Your Jellyfin music library is empty." : "Connect to Jellyfin to browse your music.")) } else { ContentUnavailableView.search(text: filter) } } else { List(songs) { SongRow(track: $0) }.listStyle(.plain).tonkunstBrandVisibility($isBrandVisible).refreshable { await store.refresh() } } }.navigationTitle("Songs").searchable(text: $filter, prompt: "Songs, artists, albums").toolbar { ToolbarItem(placement: .topBarLeading) { if isBrandVisible { TonkunstBrand() } }.sharedBackgroundVisibility(.hidden); ToolbarItemGroup(placement: .topBarTrailing) { ConnectionPill(); AccountButton(showAccount: $showAccount) } } } }
+    var body: some View { NavigationStack { Group { if store.isRestoringSession { ProgressView("Opening Tonkunst…") } else if store.profile == nil { WelcomeView(showAccount: $showAccount) } else if store.isLoading && store.tracks.isEmpty { ProgressView("Loading your music…") } else if songs.isEmpty { if filter.isEmpty { ContentUnavailableView("No Songs Yet", systemImage: "music.note", description: Text(store.connectionAvailable ? "Your Jellyfin music library is empty." : "Connect to Jellyfin to browse your music.")) } else { ContentUnavailableView.search(text: filter) } } else { List(songs) { SongRow(track: $0) }.listStyle(.plain).tonkunstBrandVisibility($isBrandVisible).refreshable { await store.refresh() } } }.navigationTitle("Songs").searchable(text: $filter, prompt: "Songs, artists, albums").toolbar { ToolbarItem(placement: .topBarLeading) { if isBrandVisible { TonkunstBrand() } }.sharedBackgroundVisibility(.hidden); ToolbarItemGroup(placement: .topBarTrailing) { ConnectionPill(); AccountButton(showAccount: $showAccount) } } } }
 }
 
 struct ArtistsView: View {
@@ -294,7 +294,29 @@ struct AccountButton: View {
 }
 
 struct WelcomeView: View {
-    var body: some View { VStack(spacing: 18) { Image("AppArtwork").resizable().scaledToFill().frame(width: 106, height: 106).clipShape(Rectangle()); Text("Your music, beautifully yours.").font(.title2.weight(.bold)); Text("Connect Tonkunst to your Jellyfin server and take your collection anywhere.").multilineTextAlignment(.center).foregroundStyle(.secondary).padding(.horizontal, 30) }.frame(maxWidth: .infinity, maxHeight: .infinity) }
+    @EnvironmentObject private var store: MusicStore
+    @Binding var showAccount: Bool
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Image("AppArtwork")
+                .resizable()
+                .scaledToFill()
+                .frame(width: 106, height: 106)
+                .clipShape(Rectangle())
+            Text("Your music, beautifully yours.")
+                .font(.title2.weight(.bold))
+            Text("Connect Tonkunst to your Jellyfin server and take your collection anywhere.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 30)
+            Button(store.savedProfiles.isEmpty ? "Connect to Jellyfin" : "Choose Saved Account") {
+                showAccount = true
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 }
 
 struct ProfileAvatar: View {

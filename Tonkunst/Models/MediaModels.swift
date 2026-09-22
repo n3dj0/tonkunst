@@ -1,11 +1,13 @@
 import Foundation
 
-struct ServerProfile: Codable, Equatable, Sendable {
+struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
     var baseURL: String
     var userID: String
     var accessToken: String
     var displayName: String
     var avatarURL: String?
+
+    var id: String { "\(baseURL)|\(userID)" }
 
     var normalizedBaseURL: URL? {
         let text = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)

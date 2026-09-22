@@ -26,6 +26,7 @@ struct AccountView: View {
     @State private var port = ""
     @State private var username = ""
     @State private var password = ""
+    @State private var isAddingNewAccount = false
 
     private var serverAddress: String {
         let host = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -40,7 +41,7 @@ struct AccountView: View {
                 if let profile = store.profile {
                     signedInSettings(profile)
                 } else {
-                    connectionSettings
+                    signedOutSettings
                 }
             }
             .navigationTitle("Account & Settings")
@@ -50,6 +51,58 @@ struct AccountView: View {
                     Button("Done") { dismiss() }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var signedOutSettings: some View {
+        if !store.savedProfiles.isEmpty && !isAddingNewAccount {
+            Section {
+                ForEach(store.savedProfiles) { profile in
+                    Button {
+                        store.useSavedAccount(profile)
+                        dismiss()
+                    } label: {
+                        HStack(spacing: iconSpacing) {
+                            ProfileAvatar(url: profile.avatarURL)
+                                .frame(width: iconColumnWidth, height: iconColumnWidth)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(profile.displayName)
+                                    .font(.headline)
+                                Text(profile.baseURL)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .swipeActions {
+                        Button("Forget", role: .destructive) {
+                            store.forgetSavedAccount(profile)
+                        }
+                    }
+                }
+            } header: {
+                Text("Saved Accounts")
+            } footer: {
+                Text("Choose an account to reconnect with its saved server settings and secure sign-in.")
+            }
+
+            Section {
+                Button("Add Another Account") { isAddingNewAccount = true }
+            }
+        } else {
+            if !store.savedProfiles.isEmpty {
+                Section {
+                    Button("Choose Saved Account") { isAddingNewAccount = false }
+                }
+            }
+            connectionSettings
         }
     }
 
@@ -90,6 +143,7 @@ struct AccountView: View {
                 Button {
                     Task {
                         await store.signIn(server: serverAddress, username: username, password: password)
+                        if store.profile != nil { password = "" }
                     }
                 } label: {
                     if store.isLoading {
@@ -150,7 +204,8 @@ struct AccountView: View {
         Section {
             Button("Sign Out", role: .destructive) {
                 store.signOut()
-                dismiss()
+                password = ""
+                isAddingNewAccount = false
             }
         }
     }

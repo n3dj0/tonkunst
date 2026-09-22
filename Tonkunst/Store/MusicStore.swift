@@ -6,6 +6,7 @@ import SwiftUI
 @MainActor
 final class MusicStore: NSObject, ObservableObject {
     @Published var profile: ServerProfile?
+    @Published private(set) var savedProfiles: [ServerProfile] = []
     @Published var tracks: [MediaTrack] = []
     @Published var currentTrack: MediaTrack?
     @Published var isPlaying = false
@@ -44,9 +45,16 @@ final class MusicStore: NSObject, ObservableObject {
             guard let self else { return }
 
             configureRemoteControls()
-            profile = await Task.detached(priority: .userInitiated) {
-                KeychainStore.load()
-            }.value
+            let sessionResult = await Task.detached(priority: .userInitiated) {
+                try KeychainStore.load()
+            }.result
+            switch sessionResult {
+            case .success(let session):
+                savedProfiles = session.profiles
+                profile = session.active
+            case .failure(let error):
+                errorMessage = error.localizedDescription
+            }
             isRestoringSession = false
 
             if profile != nil {
@@ -73,8 +81,9 @@ final class MusicStore: NSObject, ObservableObject {
     func signIn(server: String, username: String, password: String) async {
         isLoading = true; errorMessage = nil
         do {
-            profile = try await api.authenticate(server: server, username: username, password: password)
-            KeychainStore.save(profile!)
+            let authenticatedProfile = try await api.authenticate(server: server, username: username, password: password)
+            savedProfiles = try KeychainStore.save(authenticatedProfile)
+            profile = authenticatedProfile
             await refresh()
             startConnectionMonitoring()
         }
@@ -92,6 +101,7 @@ final class MusicStore: NSObject, ObservableObject {
         defer { isLoading = false }
         do {
             let fetchedTracks = try await api.fetchSongs(profile: profile)
+            guard self.profile == profile else { return }
             offline.reconcile(with: fetchedTracks)
             tracks = fetchedTracks.map { item in
                 var item = item
@@ -100,7 +110,33 @@ final class MusicStore: NSObject, ObservableObject {
             }
             connectionAvailable = true
         } catch {
+            guard self.profile == profile else { return }
             connectionAvailable = false
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func useSavedAccount(_ savedProfile: ServerProfile) {
+        guard let savedProfile = savedProfiles.first(where: { $0.id == savedProfile.id }) else { return }
+        stop()
+        serverHealthTask?.cancel()
+        KeychainStore.activate(savedProfile)
+        profile = savedProfile
+        tracks = []
+        connectionAvailable = false
+        errorMessage = nil
+        Task {
+            await refresh()
+            guard profile == savedProfile else { return }
+            startConnectionMonitoring()
+        }
+    }
+
+    func forgetSavedAccount(_ savedProfile: ServerProfile) {
+        guard profile == nil else { return }
+        do {
+            savedProfiles = try KeychainStore.remove(savedProfile)
+        } catch {
             errorMessage = error.localizedDescription
         }
     }
@@ -108,7 +144,8 @@ final class MusicStore: NSObject, ObservableObject {
     func signOut() {
         stop()
         serverHealthTask?.cancel()
-        profile = nil; tracks = []; connectionAvailable = false; KeychainStore.remove()
+        KeychainStore.signOut()
+        profile = nil; tracks = []; connectionAvailable = false; errorMessage = nil
     }
 
     func play(_ track: MediaTrack) {
@@ -262,10 +299,10 @@ final class MusicStore: NSObject, ObservableObject {
                 guard let self, let profile = self.profile else { return }
                 do {
                     try await self.api.ping(profile: profile)
-                    guard !Task.isCancelled else { return }
+                    guard !Task.isCancelled, self.profile == profile else { return }
                     self.connectionAvailable = true
                 } catch {
-                    guard !Task.isCancelled else { return }
+                    guard !Task.isCancelled, self.profile == profile else { return }
                     self.connectionAvailable = false
                 }
                 try? await Task.sleep(for: .seconds(10))
