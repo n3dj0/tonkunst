@@ -1,0 +1,10 @@
+import SwiftUI
+
+struct AccountView: View {
+    @EnvironmentObject private var store: MusicStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var server = ""
+    @State private var username = ""
+    @State private var password = ""
+    var body: some View { NavigationStack { Form { if let profile = store.profile { Section { HStack(spacing: 14) { ProfileAvatar(url: profile.avatarURL).frame(width: 52, height: 52); VStack(alignment: .leading) { Text(profile.displayName).font(.headline); Text(profile.baseURL).font(.caption).foregroundStyle(.secondary) } }; Label(store.listenStatus, systemImage: store.connectionAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill").foregroundStyle(store.connectionAvailable ? .green : .orange) } header: { Text("Jellyfin Account") }; Section("Library") { Button { Task { await store.refresh() } } label: { Label("Refresh Library", systemImage: "arrow.clockwise") }; Text("Downloads are stored only on this device. Remove individual downloads from the Offline tab.").font(.footnote).foregroundStyle(.secondary) }; Section { Button("Sign Out", role: .destructive) { store.signOut(); dismiss() } } } else { Section { TextField("Server address", text: $server, prompt: Text("http://192.168.1.252:8096")).textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled(); TextField("Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled(); SecureField("Password", text: $password); Button { Task { await store.signIn(server: server, username: username, password: password) } } label: { if store.isLoading { ProgressView() } else { Text("Connect to Jellyfin") } }.disabled(server.isEmpty || username.isEmpty || password.isEmpty || store.isLoading) } header: { Text("Connect Your Jellyfin Server") } footer: { Text("For a direct LAN Jellyfin server, include port 8096. A bare IPv4 address is treated as HTTP on port 8096.") } } }.navigationTitle("Account & Settings").navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } } } }
+}
