@@ -133,7 +133,7 @@ struct AccountView: View {
                 Label("Refresh Library", systemImage: "arrow.clockwise")
             }
 
-            Text("Downloads are stored only on this device. Remove individual downloads from the Offline tab.")
+            Text("Downloads appear in Files under On My iPhone → Tonkunst, arranged by artist and album. Remove individual downloads from the Offline tab.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }

@@ -1,5 +1,6 @@
 import AVFoundation
 import MediaPlayer
+import Network
 import SwiftUI
 
 @MainActor
@@ -27,6 +28,10 @@ final class MusicStore: NSObject, ObservableObject {
     private var timeControlStatusObservation: NSKeyValueObservation?
     private var didFinishObserver: NSObjectProtocol?
     private var didFailToFinishObserver: NSObjectProtocol?
+    private let pathMonitor = NWPathMonitor()
+    private let pathMonitorQueue = DispatchQueue(label: "com.tonkunst.network-path")
+    private var isMonitoringNetwork = false
+    private var serverHealthTask: Task<Void, Never>?
     private var isUsingFallbackStream = false
     private var canUseFallbackStream = false
 
@@ -46,22 +51,33 @@ final class MusicStore: NSObject, ObservableObject {
 
             if profile != nil {
                 await refresh()
+                startConnectionMonitoring()
             }
         }
     }
 
     deinit {
+        pathMonitor.cancel()
+        serverHealthTask?.cancel()
         if let timeObserver { player?.removeTimeObserver(timeObserver) }
         if let didFinishObserver { NotificationCenter.default.removeObserver(didFinishObserver) }
         if let didFailToFinishObserver { NotificationCenter.default.removeObserver(didFailToFinishObserver) }
     }
 
-    var offlineTracks: [MediaTrack] { tracks.filter { offline.contains($0) } }
+    var offlineTracks: [MediaTrack] {
+        let visibleIDs = Set(tracks.map(\.id))
+        return tracks.filter { offline.contains($0) } + offline.tracks.filter { !visibleIDs.contains($0.id) }
+    }
     var listenStatus: String { connectionAvailable ? "Connected to Jellyfin" : (offlineTracks.isEmpty ? "Jellyfin unavailable" : "Offline listening") }
 
     func signIn(server: String, username: String, password: String) async {
         isLoading = true; errorMessage = nil
-        do { profile = try await api.authenticate(server: server, username: username, password: password); KeychainStore.save(profile!); await refresh() }
+        do {
+            profile = try await api.authenticate(server: server, username: username, password: password)
+            KeychainStore.save(profile!)
+            await refresh()
+            startConnectionMonitoring()
+        }
         catch {
             print("Jellyfin authentication failed: \(error.localizedDescription)")
             errorMessage = error.localizedDescription
@@ -76,6 +92,7 @@ final class MusicStore: NSObject, ObservableObject {
         defer { isLoading = false }
         do {
             let fetchedTracks = try await api.fetchSongs(profile: profile)
+            offline.reconcile(with: fetchedTracks)
             tracks = fetchedTracks.map { item in
                 var item = item
                 item.isDownloaded = offline.contains(item)
@@ -88,12 +105,16 @@ final class MusicStore: NSObject, ObservableObject {
         }
     }
 
-    func signOut() { stop(); profile = nil; tracks = []; connectionAvailable = false; KeychainStore.remove() }
+    func signOut() {
+        stop()
+        serverHealthTask?.cancel()
+        profile = nil; tracks = []; connectionAvailable = false; KeychainStore.remove()
+    }
 
     func play(_ track: MediaTrack) {
         let localSource = offline.localURL(for: track)
         guard let source = localSource ?? (connectionAvailable ? track.streamURL : nil) else { errorMessage = "This song is not downloaded and Jellyfin is unavailable."; return }
-        if currentTrack?.id == track.id { togglePlay(); return }
+        if currentTrack?.id == track.id, player != nil { togglePlay(); return }
         stopPlayerOnly()
         currentTrack = track; progress = 0; playbackDuration = track.duration
         isUsingFallbackStream = false
@@ -137,7 +158,10 @@ final class MusicStore: NSObject, ObservableObject {
     func cycleRepeat() { repeatMode = repeatMode == .off ? .all : (repeatMode == .all ? .one : .off) }
 
     func toggleDownload(_ track: MediaTrack) async {
-        if offline.contains(track) { offline.remove(track) }
+        if offline.contains(track) {
+            offline.remove(track)
+            tracks = tracks.map { var value = $0; value.isDownloaded = offline.contains(value); return value }
+        }
         else { do { try await offline.download(track); tracks = tracks.map { var value = $0; value.isDownloaded = offline.contains(value); return value } } catch { errorMessage = "Download failed: \(error.localizedDescription)" } }
     }
 
@@ -197,6 +221,7 @@ final class MusicStore: NSObject, ObservableObject {
     private func handlePlaybackFailure(_ error: Error?, trackID: String) {
         guard currentTrack?.id == trackID else { return }
         isPlaying = false
+        if !isUsingFallbackStream { connectionAvailable = false }
         if canUseFallbackStream, !isUsingFallbackStream, let fallbackURL = currentTrack?.fallbackStreamURL {
             isUsingFallbackStream = true
             stopPlayerOnly()
@@ -217,6 +242,35 @@ final class MusicStore: NSObject, ObservableObject {
         didFailToFinishObserver = nil
         player?.pause()
         player = nil
+    }
+
+    private func startConnectionMonitoring() {
+        if !isMonitoringNetwork {
+            pathMonitor.pathUpdateHandler = { [weak self] path in
+                Task { @MainActor in
+                    guard let self else { return }
+                    if path.status != .satisfied { self.connectionAvailable = false }
+                }
+            }
+            pathMonitor.start(queue: pathMonitorQueue)
+            isMonitoringNetwork = true
+        }
+
+        serverHealthTask?.cancel()
+        serverHealthTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, let profile = self.profile else { return }
+                do {
+                    try await self.api.ping(profile: profile)
+                    guard !Task.isCancelled else { return }
+                    self.connectionAvailable = true
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    self.connectionAvailable = false
+                }
+                try? await Task.sleep(for: .seconds(10))
+            }
+        }
     }
 
     private func activateAudioSession(completion: @escaping @MainActor (Result<Void, Error>) -> Void) {

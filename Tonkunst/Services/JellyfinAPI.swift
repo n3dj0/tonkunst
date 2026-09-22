@@ -105,9 +105,22 @@ struct JellyfinAPI {
                 artworkURL: art,
                 streamURL: universal.url,
                 fallbackStreamURL: direct.url,
-                fileExtension: "m4a",
+                fileExtension: item.Container?.lowercased() ?? "m4a",
                 isFavorite: item.UserData?.IsFavorite ?? false
             )
+        }
+    }
+
+    /// Checks the server itself, rather than only whether the device has a
+    /// network route. This catches leaving a LAN while cellular remains active.
+    func ping(profile: ServerProfile) async throws {
+        guard let base = profile.normalizedBaseURL else { throw JellyfinError.invalidServer }
+        var request = URLRequest(url: base.appendingPathComponent("System/Ping"))
+        request.timeoutInterval = min(requestTimeout, 5)
+        request.setValue(authHeader(token: profile.accessToken), forHTTPHeaderField: "Authorization")
+        let (_, response) = try await data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw JellyfinError.unavailable
         }
     }
 
