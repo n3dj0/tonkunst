@@ -36,7 +36,10 @@ struct NowPlayingView: View {
             GeometryReader { proxy in
                 VStack(spacing: 24) {
                     if let track = store.currentTrack {
-                        Artwork(track: track, size: min(proxy.size.width - 56, max(285, proxy.size.height * 0.42)))
+                        Artwork(
+                            track: track,
+                            size: max(0, min(proxy.size.width - 56, max(285, proxy.size.height * 0.42)))
+                        )
                             .shadow(color: .black.opacity(0.23), radius: 20, y: 10)
                         VStack(spacing: 6) {
                             Text(track.title).font(.title2.weight(.bold)).multilineTextAlignment(.center)
