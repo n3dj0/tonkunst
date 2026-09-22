@@ -255,8 +255,242 @@ private struct ArtistTracksView: View {
 }
 
 struct PlaylistsView: View {
+    @EnvironmentObject private var store: MusicStore
     @Binding var showAccount: Bool
-    var body: some View { NavigationStack { ContentUnavailableView("Your Playlists", systemImage: "music.note.list", description: Text("Jellyfin playlist sync will appear here as soon as playlists are added to your library.")).navigationTitle("").navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .topBarLeading) { TonkunstBrand() }.sharedBackgroundVisibility(.hidden); ToolbarItemGroup(placement: .topBarTrailing) { ConnectionPill(); AccountButton(showAccount: $showAccount) } } } }
+    var body: some View {
+        PlaylistBrowser(library: store.playlistLibrary, showAccount: $showAccount)
+    }
+}
+
+private struct PlaylistBrowser: View {
+    @EnvironmentObject private var store: MusicStore
+    @ObservedObject var library: PlaylistLibrary
+    @Binding var showAccount: Bool
+    @State private var showCreate = false
+    @State private var name = ""
+    @State private var deleting: SavedPlaylist?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if let message = library.message {
+                    Section { Text(message).foregroundStyle(.red); Button("Retry Sync") { sync() } }
+                }
+                if library.isSyncing { ProgressView("Syncing playlists…") }
+                ForEach(library.playlists) { playlist in
+                    NavigationLink {
+                        PlaylistDetail(library: library, id: playlist.id)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(playlist.content.name)
+                            Text(status(playlist)).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .swipeActions {
+                        if !playlist.deleted && !playlist.conflict && !playlist.creationUncertain {
+                            Button("Delete", role: .destructive) { deleting = playlist }
+                                .disabled(library.isSyncing)
+                        }
+                    }
+                }
+            }
+            .overlay {
+                if library.playlists.isEmpty && !library.isSyncing && library.message == nil {
+                    ContentUnavailableView("Your Playlists", systemImage: "music.note.list",
+                        description: Text(store.profile == nil ? "Connect to Jellyfin to create and sync playlists." : "Tap + to create a playlist. Changes made offline sync when you reconnect."))
+                }
+            }
+            .refreshable { await store.syncPlaylists() }
+            .navigationTitle("Playlists")
+            .toolbar {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    ConnectionPill()
+                    Button { name = ""; showCreate = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("New playlist")
+                        .disabled(store.profile == nil || library.isSyncing)
+                    AccountButton(showAccount: $showAccount)
+                }
+            }
+            .alert("New Playlist", isPresented: $showCreate) {
+                TextField("Playlist name", text: $name)
+                Button("Cancel", role: .cancel) {}
+                Button("Create") { library.create(name: name); sync() }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || library.isSyncing)
+            }
+            .confirmationDialog("Delete playlist from this device and Jellyfin?", isPresented: Binding(
+                get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
+                Button("Delete Playlist", role: .destructive) {
+                    if let deleting { library.delete(deleting.id); sync() }
+                    deleting = nil
+                }
+            } message: { Text("Songs stay in your music library. Offline deletions sync when you reconnect.") }
+            .task { await store.syncPlaylists() }
+        }
+    }
+
+    private func sync() { Task { await store.syncPlaylists() } }
+    private func status(_ playlist: SavedPlaylist) -> String {
+        if playlist.creationUncertain { return "Creation needs review" }
+        if playlist.conflict { return "Changes need review" }
+        if playlist.deleted { return "Waiting to delete from Jellyfin" }
+        return "\(playlist.content.tracks.count) songs" + (playlist.dirty ? " · Waiting to sync" : " · Synced")
+    }
+}
+
+private struct PlaylistDetail: View {
+    @EnvironmentObject private var store: MusicStore
+    @ObservedObject var library: PlaylistLibrary
+    let id: UUID
+    @State private var showSongs = false
+    @State private var showRename = false
+    @State private var showRetry = false
+    @State private var name = ""
+    private var playlist: SavedPlaylist? { library.playlists.first { $0.id == id } }
+
+    var body: some View {
+        Group {
+            if let playlist {
+                List {
+                    if playlist.creationUncertain {
+                        Section("Creation needs review") {
+                            Text("Jellyfin may have created this playlist, but the response was lost. Refresh and check the server playlists before trying again to avoid a duplicate.")
+                            Button("Refresh from Jellyfin") { sync() }
+                            Button("Try Creating Again") { showRetry = true }
+                            Button("Discard Device Draft", role: .destructive) { library.resolve(id, keepCopy: false) }
+                        }
+                    }
+                    if playlist.conflict {
+                        Section("Changes on both devices") {
+                            Text(playlist.remote == nil ? "This playlist was removed from Jellyfin. Your device changes are still here." : "Jellyfin and this device have different changes. Keep the server version, or also save your device version as a new private playlist.")
+                            Button("Keep Both Versions") { library.resolve(id, keepCopy: true); sync() }
+                            Button("Use Server Version", role: .destructive) { library.resolve(id, keepCopy: false) }
+                        }
+                    }
+                    if let message = library.message { Text(message).foregroundStyle(.red) }
+                    if playlist.deleted {
+                        Text("Waiting to delete from Jellyfin.")
+                        Button("Cancel Deletion") { library.cancelDeletion(id) }
+                    } else {
+                        Section {
+                            Button { store.playPlaylist(playable(playlist.content.tracks)) } label: { Label("Play", systemImage: "play.fill") }
+                                .disabled(playlist.content.tracks.isEmpty)
+                            Button { showSongs = true } label: { Label("Add Songs", systemImage: "plus") }
+                                .disabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
+                        }
+                        Section {
+                            ForEach(Array(playlist.content.tracks.enumerated()), id: \.offset) { index, track in
+                                Button { store.playPlaylist(playable(playlist.content.tracks), startingAt: index) } label: {
+                                    HStack {
+                                        VStack(alignment: .leading) {
+                                            Text(track.title).foregroundStyle(.primary)
+                                            Text(track.artist).font(.caption).foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        if store.offline.contains(track) { Image(systemName: "arrow.down.circle.fill") }
+                                    }
+                                }
+                                .contextMenu {
+                                    Button(store.offline.contains(track) ? "Remove Download" : "Download Song") {
+                                        Task { await store.toggleDownload(track) }
+                                    }
+                                }
+                            }
+                            .onDelete { offsets in
+                                var content = playlist.content
+                                content.tracks.remove(atOffsets: offsets)
+                                library.edit(id, content: content); sync()
+                            }
+                            .onMove { offsets, destination in
+                                var content = playlist.content
+                                content.tracks.move(fromOffsets: offsets, toOffset: destination)
+                                library.edit(id, content: content); sync()
+                            }
+                            .deleteDisabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
+                            .moveDisabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
+                        } footer: {
+                            Text(playlist.content.tracks.isEmpty ? "Add songs to start your playlist." : (playlist.dirty ? "Changes saved on this device. Waiting to sync." : "Synced with Jellyfin. Download songs to play them offline."))
+                        }
+                    }
+                }
+                .navigationTitle(playlist.content.name)
+                .toolbar {
+                    EditButton().disabled(library.isSyncing || playlist.conflict || playlist.creationUncertain || playlist.deleted)
+                    Button("Rename") { name = playlist.content.name; showRename = true }
+                        .disabled(library.isSyncing || playlist.conflict || playlist.creationUncertain || playlist.deleted)
+                }
+                .refreshable { await store.syncPlaylists() }
+            } else {
+                ContentUnavailableView("Playlist Removed", systemImage: "music.note.list")
+            }
+        }
+        .sheet(isPresented: $showSongs) {
+            PlaylistSongPicker(library: library) { selected in
+                guard var content = self.playlist?.content else { return }
+                content.tracks += selected
+                library.edit(id, content: content); sync()
+            }
+        }
+        .alert("Rename Playlist", isPresented: $showRename) {
+            TextField("Playlist name", text: $name)
+            Button("Cancel", role: .cancel) {}
+            Button("Save") {
+                guard var content = playlist?.content else { return }
+                content.name = name
+                library.edit(id, content: content); sync()
+            }.disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || library.isSyncing)
+        }
+        .alert("Create another playlist?", isPresented: $showRetry) {
+            Button("Cancel", role: .cancel) {}
+            Button("Create") { library.retryCreation(id); sync() }
+        } message: { Text("If the earlier request succeeded, this will create a duplicate on Jellyfin.") }
+    }
+    private func sync() { Task { await store.syncPlaylists() } }
+    private func playable(_ tracks: [MediaTrack]) -> [MediaTrack] {
+        tracks.map { track in store.tracks.first { $0.id == track.id } ?? track }
+    }
+}
+
+private struct PlaylistSongPicker: View {
+    @EnvironmentObject private var store: MusicStore
+    @ObservedObject var library: PlaylistLibrary
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    @State private var selected: [MediaTrack] = []
+    let add: ([MediaTrack]) -> Void
+    private var songs: [MediaTrack] {
+        let tracks = store.tracks + store.playlistLibrary.catalog + store.playlistLibrary.playlists.flatMap { $0.content.tracks }
+        var seen = Set<String>()
+        return tracks.filter { seen.insert($0.id).inserted && (query.isEmpty || $0.matches(query)) }
+    }
+    var body: some View {
+        NavigationStack {
+            List(songs) { track in
+                Button {
+                    if selected.contains(where: { $0.id == track.id }) { selected.removeAll { $0.id == track.id } }
+                    else { selected.append(track) }
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text(track.title).foregroundStyle(.primary)
+                            Text(track.artist).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if selected.contains(where: { $0.id == track.id }) { Image(systemName: "checkmark") }
+                    }
+                }
+            }
+            .overlay { if songs.isEmpty { ContentUnavailableView("No Songs", systemImage: "music.note", description: Text("Connect to Jellyfin to load your music library.")) } }
+            .searchable(text: $query, prompt: "Songs, artists, albums")
+            .navigationTitle("Add Songs")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add (\(selected.count))") { add(selected); dismiss() }
+                        .disabled(selected.isEmpty || library.isSyncing)
+                }
+            }
+        }
+    }
 }
 
 struct OfflineView: View {

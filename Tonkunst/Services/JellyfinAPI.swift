@@ -14,7 +14,7 @@ enum JellyfinError: LocalizedError {
     }
 }
 
-struct JellyfinAPI {
+struct JellyfinAPI: PlaylistRemoteServing {
     private let clientName = "Tonkunst"
     private let deviceID = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
     private let requestTimeout: TimeInterval = 15
@@ -57,58 +57,115 @@ struct JellyfinAPI {
     }
 
     func fetchSongs(profile: ServerProfile) async throws -> [MediaTrack] {
-        guard let base = profile.normalizedBaseURL else { throw JellyfinError.invalidServer }
-        var parts = URLComponents(url: base.appendingPathComponent("Users/\(profile.userID)/Items"), resolvingAgainstBaseURL: false)!
-        parts.queryItems = [
+        let items = try await playlistItems(profile: profile, path: "Users/\(profile.userID)/Items", query: [
             URLQueryItem(name: "IncludeItemTypes", value: "Audio"), URLQueryItem(name: "Recursive", value: "true"),
             URLQueryItem(name: "SortBy", value: "SortName"), URLQueryItem(name: "Fields", value: "UserData"),
-            URLQueryItem(name: "EnableImages", value: "false"), URLQueryItem(name: "Limit", value: "500")
+            URLQueryItem(name: "EnableImages", value: "false")
+        ])
+        return items.map { track(from: $0, profile: profile) }
+    }
+
+    func track(from item: JellyfinItem, profile: ServerProfile) -> MediaTrack {
+        let base = profile.normalizedBaseURL!
+        let art = URL(string: "\(profile.baseURL)/Items/\(item.Id)/Images/Primary?maxWidth=480&quality=90&api_key=\(profile.accessToken)")
+        // Universal audio lets Jellyfin direct-play compatible files and transcode
+        // unsupported containers/codecs (notably Opus) to an iOS-friendly HLS/AAC
+        // stream. DeviceId and the playback session are required by Jellyfin's
+        // transcoding pipeline on many server versions.
+        var universal = URLComponents(url: base.appendingPathComponent("Audio/\(item.Id)/universal"), resolvingAgainstBaseURL: false)!
+        universal.queryItems = [
+            URLQueryItem(name: "UserId", value: profile.userID),
+            URLQueryItem(name: "DeviceId", value: deviceID),
+            URLQueryItem(name: "PlaySessionId", value: UUID().uuidString),
+            URLQueryItem(name: "Container", value: "mp4,m4a,mp3,aac,flac"),
+            URLQueryItem(name: "TranscodingContainer", value: "ts"),
+            URLQueryItem(name: "TranscodingProtocol", value: "hls"),
+            URLQueryItem(name: "AudioCodec", value: "aac"),
+            URLQueryItem(name: "MaxAudioChannels", value: "2"),
+            URLQueryItem(name: "MaxStreamingBitrate", value: "3200000"),
+            URLQueryItem(name: "api_key", value: profile.accessToken)
         ]
+        var direct = URLComponents(url: base.appendingPathComponent("Audio/\(item.Id)/stream"), resolvingAgainstBaseURL: false)!
+        direct.queryItems = [
+            URLQueryItem(name: "UserId", value: profile.userID),
+            URLQueryItem(name: "DeviceId", value: deviceID),
+            URLQueryItem(name: "Static", value: "true"),
+            URLQueryItem(name: "api_key", value: profile.accessToken)
+        ]
+        return MediaTrack(
+            id: item.Id,
+            title: metadataValue([item.Name], placeholder: "Unknown Song"),
+            artist: metadataValue([item.AlbumArtist] + (item.Artists ?? []).map { Optional($0) }, placeholder: "Unknown Artist"),
+            album: metadataValue([item.Album], placeholder: "Unknown Album"),
+            duration: Double(item.RunTimeTicks ?? 0) / 10_000_000,
+            artworkURL: art,
+            streamURL: universal.url,
+            fallbackStreamURL: direct.url,
+            fileExtension: audioFileExtension(for: item.Container),
+            isFavorite: item.UserData?.IsFavorite ?? false
+        )
+    }
+
+    func playlistRequest(profile: ServerProfile, path: String, method: String = "GET",
+                         query: [URLQueryItem] = [], body: Data? = nil) async throws -> Data {
+        guard let base = profile.normalizedBaseURL else { throw JellyfinError.invalidServer }
+        var parts = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
+        parts.queryItems = query.isEmpty ? nil : query
         var request = URLRequest(url: parts.url!)
-        request.timeoutInterval = requestTimeout
+        request.httpMethod = method
+        request.httpBody = body
         request.setValue(authHeader(token: profile.accessToken), forHTTPHeaderField: "Authorization")
+        if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         let (data, response) = try await data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw JellyfinError.unavailable }
-        let responseBody = try JSONDecoder().decode(JellyfinItemsResponse.self, from: data)
-        return responseBody.Items.map { item in
-            let art = URL(string: "\(profile.baseURL)/Items/\(item.Id)/Images/Primary?maxWidth=480&quality=90&api_key=\(profile.accessToken)")
-            // Universal audio lets Jellyfin direct-play compatible files and transcode
-            // unsupported containers/codecs (notably Opus) to an iOS-friendly HLS/AAC
-            // stream. DeviceId and the playback session are required by Jellyfin's
-            // transcoding pipeline on many server versions.
-            var universal = URLComponents(url: base.appendingPathComponent("Audio/\(item.Id)/universal"), resolvingAgainstBaseURL: false)!
-            universal.queryItems = [
+        guard let http = response as? HTTPURLResponse else { throw JellyfinError.badResponse }
+        guard (200..<300).contains(http.statusCode) else { throw PlaylistHTTPError(status: http.statusCode) }
+        return data
+    }
+
+    func playlistItems(profile: ServerProfile, path: String, query: [URLQueryItem] = []) async throws -> [JellyfinItem] {
+        var items: [JellyfinItem] = []
+        while true {
+            let data = try await playlistRequest(profile: profile, path: path, query: query + [
                 URLQueryItem(name: "UserId", value: profile.userID),
-                URLQueryItem(name: "DeviceId", value: deviceID),
-                URLQueryItem(name: "PlaySessionId", value: UUID().uuidString),
-                URLQueryItem(name: "Container", value: "mp4,m4a,mp3,aac,flac"),
-                URLQueryItem(name: "TranscodingContainer", value: "ts"),
-                URLQueryItem(name: "TranscodingProtocol", value: "hls"),
-                URLQueryItem(name: "AudioCodec", value: "aac"),
-                URLQueryItem(name: "MaxAudioChannels", value: "2"),
-                URLQueryItem(name: "MaxStreamingBitrate", value: "3200000"),
-                URLQueryItem(name: "api_key", value: profile.accessToken)
-            ]
-            var direct = URLComponents(url: base.appendingPathComponent("Audio/\(item.Id)/stream"), resolvingAgainstBaseURL: false)!
-            direct.queryItems = [
-                URLQueryItem(name: "UserId", value: profile.userID),
-                URLQueryItem(name: "DeviceId", value: deviceID),
-                URLQueryItem(name: "Static", value: "true"),
-                URLQueryItem(name: "api_key", value: profile.accessToken)
-            ]
-            return MediaTrack(
-                id: item.Id,
-                title: metadataValue([item.Name], placeholder: "Unknown Song"),
-                artist: metadataValue([item.AlbumArtist] + (item.Artists ?? []).map { Optional($0) }, placeholder: "Unknown Artist"),
-                album: metadataValue([item.Album], placeholder: "Unknown Album"),
-                duration: Double(item.RunTimeTicks ?? 0) / 10_000_000,
-                artworkURL: art,
-                streamURL: universal.url,
-                fallbackStreamURL: direct.url,
-                fileExtension: audioFileExtension(for: item.Container),
-                isFavorite: item.UserData?.IsFavorite ?? false
-            )
+                URLQueryItem(name: "StartIndex", value: String(items.count)),
+                URLQueryItem(name: "Limit", value: "200")
+            ])
+            let page = try JSONDecoder().decode(JellyfinItemsResponse.self, from: data)
+            items += page.Items
+            if page.Items.isEmpty || items.count >= (page.TotalRecordCount ?? Int.max) || (page.TotalRecordCount == nil && page.Items.count < 200) { return items }
         }
+    }
+
+    func fetchPlaylists(profile: ServerProfile) async throws -> [RemotePlaylist] {
+        let items = try await playlistItems(profile: profile, path: "Users/\(profile.userID)/Items", query: [
+            URLQueryItem(name: "IncludeItemTypes", value: "Playlist"),
+            URLQueryItem(name: "Recursive", value: "true")
+        ])
+        var result: [RemotePlaylist] = []
+        for item in items {
+            let entries = try await playlistItems(profile: profile, path: "Playlists/\(item.Id)/Items")
+            result.append(RemotePlaylist(id: item.Id, content: PlaylistContent(name: item.Name,
+                tracks: entries.map { track(from: $0, profile: profile) })))
+        }
+        return result
+    }
+
+    func deletePlaylist(profile: ServerProfile, id: String) async throws {
+        _ = try await playlistRequest(profile: profile, path: "Items/\(id)", method: "DELETE")
+    }
+
+    func savePlaylist(profile: ServerProfile, id: String?, content: PlaylistContent) async throws -> String {
+        var body: [String: Any] = ["Name": content.name, "Ids": content.tracks.map(\.id)]
+        if id == nil {
+            body["UserId"] = profile.userID
+            body["MediaType"] = "Audio"
+            body["IsPublic"] = false
+        }
+        let data = try await playlistRequest(profile: profile, path: id.map { "Playlists/\($0)" } ?? "Playlists",
+                                             method: "POST", body: JSONSerialization.data(withJSONObject: body))
+        if let id { return id }
+        struct Created: Decodable { let Id: String }
+        return try JSONDecoder().decode(Created.self, from: data).Id
     }
 
     /// Checks the server itself, rather than only whether the device has a

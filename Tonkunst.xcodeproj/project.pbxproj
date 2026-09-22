@@ -18,6 +18,7 @@
 		B00000000000000000000009 /* LibraryViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000010 /* LibraryViews.swift */; };
 		B00000000000000000000010 /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000011 /* AccountView.swift */; };
 		B00000000000000000000011 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000012 /* Assets.xcassets */; };
+B00000000000000000000012 = {isa = PBXBuildFile; fileRef = A00000000000000000000014; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -34,6 +35,7 @@
 		A00000000000000000000011 /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountView.swift; sourceTree = "<group>"; };
 		A00000000000000000000012 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A00000000000000000000013 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+A00000000000000000000014 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistLibrary.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -83,6 +85,7 @@
 				A00000000000000000000004 /* KeychainStore.swift */,
 				A00000000000000000000005 /* JellyfinAPI.swift */,
 				A00000000000000000000006 /* OfflineLibrary.swift */,
+A00000000000000000000014,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -194,6 +197,7 @@
 				B00000000000000000000003 /* KeychainStore.swift in Sources */,
 				B00000000000000000000004 /* JellyfinAPI.swift in Sources */,
 				B00000000000000000000005 /* OfflineLibrary.swift in Sources */,
+B00000000000000000000012,
 				B00000000000000000000006 /* MusicStore.swift in Sources */,
 				B00000000000000000000007 /* Components.swift in Sources */,
 				B00000000000000000000008 /* PlayerViews.swift in Sources */,

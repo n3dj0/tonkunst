@@ -46,6 +46,7 @@ struct MediaTrack: Identifiable, Codable, Hashable {
 
 struct JellyfinItemsResponse: Decodable {
     let Items: [JellyfinItem]
+    let TotalRecordCount: Int?
 }
 
 struct JellyfinItem: Decodable {

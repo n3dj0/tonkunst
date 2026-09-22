@@ -21,6 +21,10 @@ final class MusicStore: NSObject, ObservableObject {
     @Published var progress: Double = 0
     @Published var playbackDuration: Double = 0
     let offline = OfflineLibrary()
+    let playlistLibrary = PlaylistLibrary()
+    private var playbackQueue: [MediaTrack]?
+    private var playbackQueueIndex = 0
+    private var lastPlaylistSync = Date.distantPast
 
     enum RepeatMode: String { case off, all, one }
     private let api = JellyfinAPI()
@@ -60,6 +64,7 @@ final class MusicStore: NSObject, ObservableObject {
             case .failure(let error):
                 errorMessage = error.localizedDescription
             }
+            playlistLibrary.activate(profile)
             isRestoringSession = false
 
             if profile != nil && connectionEnabled {
@@ -95,7 +100,9 @@ final class MusicStore: NSObject, ObservableObject {
             connectionGeneration += 1
             connectionEnabled = true
             UserDefaults.standard.set(true, forKey: Self.connectionEnabledKey)
+            if profile?.id != authenticatedProfile.id { stop(); tracks = [] }
             profile = authenticatedProfile
+            playlistLibrary.activate(profile)
             await refresh()
             startConnectionMonitoring()
         }
@@ -115,6 +122,7 @@ final class MusicStore: NSObject, ObservableObject {
         do {
             let fetchedTracks = try await api.fetchSongs(profile: profile)
             guard self.profile == profile, connectionEnabled, connectionGeneration == generation else { return }
+            playlistLibrary.cacheTracks(fetchedTracks, profile: profile)
             offline.reconcile(with: fetchedTracks)
             tracks = fetchedTracks.map { item in
                 var item = item
@@ -122,6 +130,7 @@ final class MusicStore: NSObject, ObservableObject {
                 return item
             }
             connectionAvailable = true
+            await syncPlaylists()
         } catch {
             guard self.profile == profile, connectionEnabled, connectionGeneration == generation else { return }
             connectionAvailable = false
@@ -139,6 +148,7 @@ final class MusicStore: NSObject, ObservableObject {
         UserDefaults.standard.set(true, forKey: Self.connectionEnabledKey)
         KeychainStore.activate(savedProfile)
         profile = savedProfile
+        playlistLibrary.activate(profile)
         tracks = []
         connectionAvailable = false
         errorMessage = nil
@@ -196,10 +206,28 @@ final class MusicStore: NSObject, ObservableObject {
         isConnecting = false
         UserDefaults.standard.set(true, forKey: Self.connectionEnabledKey)
         KeychainStore.signOut()
+        playlistLibrary.activate(nil)
         profile = nil; tracks = []; connectionAvailable = false; errorMessage = nil
     }
 
-    func play(_ track: MediaTrack) {
+    func syncPlaylists() async {
+        guard let profile else { return }
+        await playlistLibrary.sync(profile: profile) {
+            self.profile == profile && self.connectionEnabled && self.connectionAvailable
+        }
+    }
+
+    func playPlaylist(_ tracks: [MediaTrack], startingAt index: Int = 0) {
+        guard tracks.indices.contains(index) else { return }
+        playbackQueue = tracks
+        playbackQueueIndex = index
+        stopPlayerOnly()
+        currentTrack = nil
+        play(tracks[index], preservingQueue: true)
+    }
+
+    func play(_ track: MediaTrack, preservingQueue: Bool = false) {
+        if !preservingQueue { playbackQueue = nil }
         let localSource = offline.localURL(for: track)
         guard let source = localSource ?? (connectionAvailable ? track.streamURL : nil) else { errorMessage = "This song is not downloaded and Jellyfin is unavailable."; return }
         if currentTrack?.id == track.id, player != nil { togglePlay(); return }
@@ -231,18 +259,38 @@ final class MusicStore: NSObject, ObservableObject {
             }
         }
     }
-    func stop() { stopPlayerOnly(); currentTrack = nil; isPlaying = false; deactivateAudioSession() }
+    func stop() { playbackQueue = nil; stopPlayerOnly(); currentTrack = nil; isPlaying = false; deactivateAudioSession() }
     func seek(to seconds: Double) { player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600)); progress = seconds }
     func skip(_ delta: TimeInterval) { seek(to: max(0, min(playbackDuration, progress + delta))) }
 
     func next() {
-        guard !tracks.isEmpty else { return }
-        guard let currentTrack, let index = tracks.firstIndex(where: { $0.id == currentTrack.id }) else { play(tracks[0]); return }
-        if isShuffled { play(tracks.filter { $0.id != currentTrack.id }.randomElement() ?? currentTrack) }
-        else if index + 1 < tracks.count { play(tracks[index + 1]) }
-        else if repeatMode == .all { play(tracks[0]) }
+        let queue = playbackQueue ?? tracks
+        guard !queue.isEmpty else { return }
+        guard let currentTrack else { play(queue[0], preservingQueue: true); return }
+        let index = playbackQueue == nil ? (queue.firstIndex { $0.id == currentTrack.id } ?? 0) : playbackQueueIndex
+        let nextIndex: Int?
+        if isShuffled { nextIndex = queue.indices.filter { $0 != index }.randomElement() ?? index }
+        else if index + 1 < queue.count { nextIndex = index + 1 }
+        else { nextIndex = repeatMode == .all ? 0 : nil }
+        if let nextIndex {
+            playbackQueueIndex = nextIndex
+            stopPlayerOnly(); self.currentTrack = nil
+            play(queue[nextIndex], preservingQueue: true)
+        }
     }
-    func previous() { if progress > 4 { seek(to: 0) } else if let currentTrack, let index = tracks.firstIndex(where: { $0.id == currentTrack.id }), index > 0 { play(tracks[index - 1]) } }
+    func previous() {
+        let queue = playbackQueue ?? tracks
+        if progress > 4 { seek(to: 0) }
+        else if let currentTrack {
+            let index = playbackQueue == nil ? (queue.firstIndex { $0.id == currentTrack.id } ?? 0) : playbackQueueIndex
+            if index > 0 {
+                playbackQueueIndex = index - 1
+                stopPlayerOnly(); self.currentTrack = nil
+                play(queue[index - 1], preservingQueue: true)
+            }
+        }
+    }
+
     func cycleRepeat() { repeatMode = repeatMode == .off ? .all : (repeatMode == .all ? .one : .off) }
 
     func toggleDownload(_ track: MediaTrack) async {
@@ -360,7 +408,12 @@ final class MusicStore: NSObject, ObservableObject {
                 do {
                     try await self.api.ping(profile: profile)
                     guard !Task.isCancelled, self.profile == profile, self.connectionEnabled, self.connectionGeneration == generation else { return }
+                    let reconnected = !self.connectionAvailable
                     self.connectionAvailable = true
+                    if reconnected || Date().timeIntervalSince(self.lastPlaylistSync) >= 60 {
+                        self.lastPlaylistSync = Date()
+                        await self.syncPlaylists()
+                    }
                 } catch {
                     guard !Task.isCancelled, self.profile == profile, self.connectionEnabled, self.connectionGeneration == generation else { return }
                     self.connectionAvailable = false
