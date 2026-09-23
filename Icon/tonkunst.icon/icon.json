@@ -1,0 +1,400 @@
+{
+  "fill" : {
+    "automatic-gradient" : "display-p3:0.52623,0.57238,0.97108,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "fill-specializations" : [
+            {
+              "value" : "automatic"
+            },
+            {
+              "appearance" : "dark",
+              "value" : {
+                "solid" : "srgb:0.40962,0.53333,1.00000,1.00000"
+              }
+            },
+            {
+              "appearance" : "tinted",
+              "value" : {
+                "solid" : "srgb:1.00000,0.18574,0.57340,1.00000"
+              }
+            }
+          ],
+          "image-name" : "music-icon.png",
+          "name" : "music-icon",
+          "position" : {
+            "scale" : 0.45,
+            "translation-in-points" : [
+              -331.83312500000017,
+              -120.28781250000009
+            ]
+          }
+        },
+        {
+          "blend-mode-specializations" : [
+            {
+              "value" : "hard-light"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "normal"
+            }
+          ],
+          "fill-specializations" : [
+            {
+              "value" : {
+                "solid" : "srgb:0.75294,0.80000,0.84706,0.90000"
+              }
+            },
+            {
+              "appearance" : "dark",
+              "value" : {
+                "solid" : "gray:0.25000,0.80000"
+              }
+            },
+            {
+              "appearance" : "tinted",
+              "value" : {
+                "solid" : "gray:0.25000,0.80000"
+              }
+            }
+          ],
+          "hidden" : false,
+          "image-name" : "3.circle.svg",
+          "name" : "3.circle",
+          "opacity" : 1,
+          "position" : {
+            "scale" : 0.12,
+            "translation-in-points" : [
+              169.94187499999998,
+              193.72218750000002
+            ]
+          }
+        },
+        {
+          "blend-mode-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : "normal"
+            }
+          ],
+          "fill-specializations" : [
+            {
+              "appearance" : "tinted",
+              "value" : {
+                "solid" : "gray:0.59787,0.75000"
+              }
+            }
+          ],
+          "image-name" : "2.circle.svg",
+          "name" : "2.circle",
+          "opacity-specializations" : [
+            {
+              "value" : 0.8
+            },
+            {
+              "appearance" : "dark",
+              "value" : 0.8
+            },
+            {
+              "appearance" : "tinted",
+              "value" : 1
+            }
+          ],
+          "position" : {
+            "scale" : 0.55,
+            "translation-in-points" : [
+              169.94187499999998,
+              174.11718749999977
+            ]
+          }
+        },
+        {
+          "blend-mode" : "normal",
+          "fill-specializations" : [
+            {
+              "value" : "automatic"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "none"
+            },
+            {
+              "appearance" : "tinted",
+              "value" : {
+                "solid" : "gray:1.00000,1.00000"
+              }
+            }
+          ],
+          "image-name" : "1.circle.svg",
+          "name" : "1.circle",
+          "opacity-specializations" : [
+            {
+              "value" : 0.9
+            },
+            {
+              "appearance" : "dark",
+              "value" : 0.65
+            },
+            {
+              "appearance" : "tinted",
+              "value" : 1
+            }
+          ],
+          "position" : {
+            "scale" : 2,
+            "translation-in-points" : [
+              170.0168749999999,
+              -133.8828125
+            ]
+          }
+        },
+        {
+          "blend-mode-specializations" : [
+            {
+              "value" : "hard-light"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "normal"
+            }
+          ],
+          "fill-specializations" : [
+            {
+              "value" : "none"
+            },
+            {
+              "appearance" : "tinted",
+              "value" : "automatic"
+            }
+          ],
+          "image-name" : "4.circle.svg",
+          "name" : "6.grove",
+          "opacity-specializations" : [
+            {
+              "value" : 1
+            },
+            {
+              "appearance" : "dark",
+              "value" : 1
+            }
+          ],
+          "position" : {
+            "scale" : 1.25,
+            "translation-in-points" : [
+              170.56687499999987,
+              165.86718749999994
+            ]
+          }
+        },
+        {
+          "blend-mode-specializations" : [
+            {
+              "value" : "hard-light"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "normal"
+            }
+          ],
+          "fill-specializations" : [
+            {
+              "value" : "none"
+            },
+            {
+              "appearance" : "tinted",
+              "value" : "automatic"
+            }
+          ],
+          "image-name" : "4.circle.svg",
+          "name" : "5.grove",
+          "opacity-specializations" : [
+            {
+              "value" : 1
+            },
+            {
+              "appearance" : "dark",
+              "value" : 1
+            }
+          ],
+          "position" : {
+            "scale" : 1.1,
+            "translation-in-points" : [
+              170.56687499999987,
+              165.86718749999994
+            ]
+          }
+        },
+        {
+          "blend-mode-specializations" : [
+            {
+              "value" : "hard-light"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "normal"
+            }
+          ],
+          "fill-specializations" : [
+            {
+              "value" : "none"
+            },
+            {
+              "appearance" : "tinted",
+              "value" : "automatic"
+            }
+          ],
+          "image-name" : "4.circle.svg",
+          "name" : "4.grove",
+          "opacity-specializations" : [
+            {
+              "value" : 1
+            },
+            {
+              "appearance" : "dark",
+              "value" : 1
+            }
+          ],
+          "position" : {
+            "scale" : 0.95,
+            "translation-in-points" : [
+              170.49187499999982,
+              166.99218749999983
+            ]
+          }
+        },
+        {
+          "blend-mode-specializations" : [
+            {
+              "value" : "hard-light"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "normal"
+            }
+          ],
+          "fill-specializations" : [
+            {
+              "value" : "none"
+            },
+            {
+              "appearance" : "tinted",
+              "value" : "automatic"
+            }
+          ],
+          "image-name" : "4.circle.svg",
+          "name" : "3.grove",
+          "opacity-specializations" : [
+            {
+              "value" : 1
+            },
+            {
+              "appearance" : "dark",
+              "value" : 1
+            }
+          ],
+          "position" : {
+            "scale" : 0.8,
+            "translation-in-points" : [
+              170.41687499999978,
+              168.11718749999983
+            ]
+          }
+        },
+        {
+          "blend-mode-specializations" : [
+            {
+              "value" : "hard-light"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "normal"
+            }
+          ],
+          "fill-specializations" : [
+            {
+              "value" : "none"
+            },
+            {
+              "appearance" : "tinted",
+              "value" : "automatic"
+            }
+          ],
+          "image-name" : "4.circle.svg",
+          "name" : "2.grove",
+          "opacity-specializations" : [
+            {
+              "value" : 1
+            },
+            {
+              "appearance" : "dark",
+              "value" : 1
+            }
+          ],
+          "position" : {
+            "scale" : 0.65,
+            "translation-in-points" : [
+              170.34187499999985,
+              169.24218750000006
+            ]
+          }
+        },
+        {
+          "blend-mode-specializations" : [
+            {
+              "value" : "hard-light"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "normal"
+            }
+          ],
+          "fill-specializations" : [
+            {
+              "value" : "none"
+            },
+            {
+              "appearance" : "tinted",
+              "value" : "automatic"
+            }
+          ],
+          "image-name" : "4.circle.svg",
+          "name" : "1.grove",
+          "opacity-specializations" : [
+            {
+              "value" : 1
+            },
+            {
+              "appearance" : "dark",
+              "value" : 1
+            }
+          ],
+          "position" : {
+            "scale" : 0.5,
+            "translation-in-points" : [
+              170.56687499999987,
+              165.86718749999994
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}
