@@ -173,7 +173,21 @@ struct AccountView: View {
                     Text(profile.baseURL)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
                 }
+
+                Spacer(minLength: 8)
+
+                Button("Sign Out", role: .destructive) {
+                    store.signOut()
+                    password = ""
+                    isAddingNewAccount = false
+                }
+                .font(.subheadline.weight(.semibold))
+                .buttonStyle(.glass)
+                .tint(.red)
+                .fixedSize()
             }
 
             HStack(spacing: iconSpacing) {
@@ -185,28 +199,27 @@ struct AccountView: View {
             .accessibilityElement(children: .combine)
         }
 
-        Section("Library") {
+        Section {
             Button {
                 Task { await store.refresh() }
             } label: {
-                HStack(spacing: iconSpacing) {
+                HStack(spacing: 6) {
                     Image(systemName: "arrow.clockwise")
-                        .frame(width: iconColumnWidth)
                     Text("Refresh Library")
                 }
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
             }
-
+            .buttonStyle(.glass)
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+        } header: {
+            Text("Library")
+        } footer: {
             Text("Downloads appear in Files under On My iPhone → Tonkunst, arranged by artist and album. Remove individual downloads from the Offline tab.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-        }
-
-        Section {
-            Button("Sign Out", role: .destructive) {
-                store.signOut()
-                password = ""
-                isAddingNewAccount = false
-            }
         }
     }
 }
