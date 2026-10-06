@@ -20,5 +20,12 @@ struct TonkunstApp: App {
         navigationBar.compactAppearance = appearance
     }
 
-    var body: some Scene { WindowGroup { LibraryView().environmentObject(store).tint(Color(red: 0.22, green: 0.45, blue: 0.92)) } }
+    var body: some Scene {
+        WindowGroup {
+            LibraryView()
+                .environmentObject(store)
+                .tint(.white)
+                .accentColor(.white)
+        }
+    }
 }
