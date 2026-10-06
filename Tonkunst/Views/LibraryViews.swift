@@ -270,14 +270,22 @@ private struct PlaylistBrowser: View {
     @State private var name = ""
     @State private var deleting: SavedPlaylist?
     @State private var isBrandVisible = true
+    @State private var isRefreshing = false
+    @State private var showsInitialProgress = false
+
+    private var needsInitialProgress: Bool {
+        library.playlists.isEmpty && library.isSyncing && !isRefreshing
+    }
 
     var body: some View {
         NavigationStack {
             List {
                 if let message = library.message {
-                    Section { Text(message).foregroundStyle(.red); Button("Retry Sync") { sync() } }
+                    Section {
+                        Text(message).foregroundStyle(.red)
+                        Button("Retry Sync") { Task { await store.syncPlaylists(isUserInitiated: true) } }
+                    }
                 }
-                if library.isSyncing { ProgressView("Syncing playlists…") }
                 ForEach(library.playlists) { playlist in
                     NavigationLink {
                         PlaylistDetail(library: library, id: playlist.id)
@@ -311,12 +319,26 @@ private struct PlaylistBrowser: View {
             .listStyle(.plain)
             .tonkunstBrandVisibility($isBrandVisible)
             .overlay {
-                if library.playlists.isEmpty && !library.isSyncing && library.message == nil {
+                if needsInitialProgress && showsInitialProgress {
+                    ProgressView("Loading playlists…")
+                } else if library.playlists.isEmpty && !library.isSyncing && library.message == nil {
                     ContentUnavailableView("Your Playlists", systemImage: "music.note.list",
                         description: Text(store.profile == nil ? "Connect to Jellyfin to create and sync playlists." : "Tap + to create a playlist. Changes made offline sync when you reconnect."))
                 }
             }
-            .refreshable { await store.syncPlaylists() }
+            .refreshable {
+                isRefreshing = true
+                defer { isRefreshing = false }
+                await store.syncPlaylists(isUserInitiated: true)
+            }
+            .task(id: needsInitialProgress) {
+                showsInitialProgress = false
+                guard needsInitialProgress else { return }
+                // Avoid flashing a spinner for fast requests; keep cached lists stable.
+                do { try await Task.sleep(for: .milliseconds(500)) }
+                catch { return }
+                showsInitialProgress = true
+            }
             .navigationTitle(isBrandVisible ? "" : "Playlists")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -346,7 +368,6 @@ private struct PlaylistBrowser: View {
                     deleting = nil
                 }
             } message: { Text("Songs stay in your music library. Offline deletions sync when you reconnect.") }
-            .task { await store.syncPlaylists() }
         }
     }
 
@@ -463,7 +484,7 @@ private struct PlaylistDetail: View {
                 .environment(\.editMode, $editMode)
                 .navigationTitle(playlist.content.name)
                 .navigationBarTitleDisplayMode(.inline)
-                .refreshable { await store.syncPlaylists() }
+                .refreshable { await store.syncPlaylists(isUserInitiated: true) }
             } else {
                 ContentUnavailableView("Playlist Removed", systemImage: "music.note.list")
             }

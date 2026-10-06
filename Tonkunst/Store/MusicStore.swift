@@ -27,6 +27,7 @@ final class MusicStore: NSObject, ObservableObject {
     private var playbackQueue: [MediaTrack]?
     private var playbackQueueIndex = 0
     private var lastPlaylistSync = Date.distantPast
+    private var playlistRefreshAvailableDates: [String: Date] = [:]
 
     enum RepeatMode: String { case off, all, one }
     private let api = JellyfinAPI()
@@ -239,8 +240,18 @@ final class MusicStore: NSObject, ObservableObject {
         profile = nil; tracks = []; connectionAvailable = false; errorMessage = nil
     }
 
-    func syncPlaylists() async {
-        guard let profile else { return }
+    func syncPlaylists(isUserInitiated: Bool = false) async {
+        guard let profile, connectionEnabled, connectionAvailable,
+              !playlistLibrary.isSyncing else { return }
+        if isUserInitiated,
+           let availableAt = playlistRefreshAvailableDates[profile.id],
+           Date() < availableAt { return }
+        defer {
+            // Failures also consume the cooldown; edits and reconnection can still sync immediately.
+            playlistRefreshAvailableDates[profile.id] = Date().addingTimeInterval(Self.manualRefreshCooldown)
+        }
+        // All sync triggers share the polling clock, including connection and manual refreshes.
+        lastPlaylistSync = Date()
         await playlistLibrary.sync(profile: profile) {
             self.profile == profile && self.connectionEnabled && self.connectionAvailable
         }
@@ -440,7 +451,6 @@ final class MusicStore: NSObject, ObservableObject {
                     let reconnected = !self.connectionAvailable
                     self.connectionAvailable = true
                     if reconnected || Date().timeIntervalSince(self.lastPlaylistSync) >= 60 {
-                        self.lastPlaylistSync = Date()
                         await self.syncPlaylists()
                     }
                 } catch {

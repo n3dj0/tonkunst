@@ -25,13 +25,15 @@ The app permits local HTTP because many home Jellyfin servers do not have TLS co
 
 Manual library refreshes have a 10-second cooldown after each attempt, including failures. The account screen shows a countdown until refreshing is available again. Pull to refresh shares the same limit, and overlapping library requests are ignored. Automatic connection refreshes can run during the manual cooldown.
 
+Manual playlist refreshes (pull to refresh in the list or a playlist, and Retry Sync) share a separate 10-second cooldown per account after each playlist sync attempt, including failures. Repeated requests during a sync or cooldown dispatch no new network requests. Opening the Playlists tab never triggers a request. Playlist edits and reconnection can sync immediately.
+
 You can copy downloaded audio from Files. Keep the files in their Tonkunst folders if you want the app to continue playing them offline.
 
 ## Playlists
 
 Create a playlist with **+** in the Playlists tab, then add songs. Use **Edit** to reorder or remove songs, **Rename** to change its name, or swipe a playlist to delete it. Playlist playback follows its own order, including repeated songs. Long-press a song in a playlist to download it for offline listening.
 
-Playlists and the song catalog are cached separately for each server/account. Offline edits and deletions survive app restarts and sync when Tonkunst reconnects. While the app is running, it checks for playlist changes roughly once a minute; pull to refresh for an immediate sync. Syncing requires access to Jellyfin and permission to edit the playlist. Audio downloads are separate from playlist syncing.
+Playlists and the song catalog are cached separately for each server/account. Offline edits and deletions survive app restarts and sync when Tonkunst reconnects. While the app is running, it checks for playlist changes roughly once a minute; pull to refresh for an immediate sync. Opening the Playlists tab displays the cached list without starting another sync. Background syncs keep the list in place; only an empty initial load lasting more than half a second shows a loading indicator. Pull to refresh uses the system refresh control. Syncing requires access to Jellyfin and permission to edit the playlist. Audio downloads are separate from playlist syncing.
 
 If both the device and server changed a playlist since the last sync, open it to choose **Use Server Version** or **Keep Both Versions**. Keeping both saves the device version as a new private playlist. An interrupted creation request requires review before retrying, since Jellyfin may already have created the playlist. Check the refreshed list before choosing **Try Creating Again**.
 
