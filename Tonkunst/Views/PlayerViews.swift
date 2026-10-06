@@ -14,15 +14,16 @@ struct MiniPlayer: View {
                         Text(track.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer()
-                    Button { store.previous() } label: { Image(systemName: "backward.fill") }.buttonStyle(.borderless)
-                    Button { store.togglePlay() } label: { Image(systemName: store.isPlaying ? "pause.fill" : "play.fill").font(.title3) }.buttonStyle(.borderless)
-                    Button { store.next() } label: { Image(systemName: "forward.fill") }.buttonStyle(.borderless)
+                    Button { store.previous() } label: { Image(systemName: "backward.fill").foregroundStyle(.primary) }.buttonStyle(.borderless)
+                    Button { store.togglePlay() } label: { Image(systemName: store.isPlaying ? "pause.fill" : "play.fill").font(.title3).foregroundStyle(.primary) }.buttonStyle(.borderless)
+                    Button { store.next() } label: { Image(systemName: "forward.fill").foregroundStyle(.primary) }.buttonStyle(.borderless)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .contentShape(Capsule())
             }
             .buttonStyle(.plain)
+            .tint(.primary)
             .glassEffect(.regular.interactive())
         }
     }
