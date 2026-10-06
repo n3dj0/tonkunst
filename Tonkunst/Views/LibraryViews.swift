@@ -55,6 +55,11 @@ private extension View {
 }
 
 private extension View {
+    /// Gives every tab the same breathing room below the fixed navigation header.
+    func libraryHeaderSpacing() -> some View {
+        safeAreaPadding(.top, 8)
+    }
+
     /// The brand belongs to the top bar only while a collection is at rest.
     /// Once its content moves, the normal screen title keeps the navigation bar clear.
     func tonkunstBrandVisibility(_ isVisible: Binding<Bool>) -> some View {
@@ -163,6 +168,7 @@ struct SongsView: View {
                         .pullToSearch(isRevealed: isSearchRevealed, text: $filter, prompt: "Songs, artists, albums")
                 }
             }
+            .libraryHeaderSpacing()
             .ambientScreen()
             .navigationTitle(isBrandVisible ? "" : "Songs")
             .navigationBarTitleDisplayMode(.inline)
@@ -233,6 +239,7 @@ struct ArtistsView: View {
                     }
                 }
             }
+            .libraryHeaderSpacing()
             .ambientScreen()
             .navigationTitle(isBrandVisible ? "" : "Artists")
             .navigationBarTitleDisplayMode(.inline)
@@ -368,6 +375,7 @@ private struct PlaylistBrowser: View {
                 catch { return }
                 showsInitialProgress = true
             }
+            .libraryHeaderSpacing()
             .ambientScreen()
             .navigationTitle(isBrandVisible ? "" : "Playlists")
             .navigationBarTitleDisplayMode(.inline)
@@ -618,6 +626,7 @@ struct OfflineView: View {
                         .revealSearchOnPull($isSearchRevealed)
                 }
             }
+            .libraryHeaderSpacing()
             .ambientScreen()
             .navigationTitle(isBrandVisible ? "" : "Offline")
             .navigationBarTitleDisplayMode(.inline)
@@ -664,6 +673,7 @@ struct SearchView: View {
                         .listStyle(.plain)
                 }
             }
+            .libraryHeaderSpacing()
             .ambientScreen()
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)

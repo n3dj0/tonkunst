@@ -83,7 +83,11 @@ struct NowPlayingView: View {
                 .padding()
             }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") { dismiss() }
+                        .tint(Color.primary)
+                        .foregroundStyle(Color.primary)
+                }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     RoutePickerView()
                         .frame(width: 30, height: 30)
@@ -91,7 +95,9 @@ struct NowPlayingView: View {
                     if let track = store.currentTrack {
                         Button { Task { await store.toggleDownload(track) } } label: {
                             Image(systemName: store.offline.contains(track) ? "iphone.gen3" : "arrow.down.circle")
+                                .foregroundStyle(Color.primary)
                         }
+                        .tint(Color.primary)
                         .accessibilityLabel(store.offline.contains(track) ? "Downloaded" : "Download")
                     }
                 }
@@ -104,4 +110,15 @@ struct NowPlayingView: View {
     private func time(_ value: Double) -> String { String(format: "%d:%02d", Int(value) / 60, Int(value) % 60) }
 }
 
-struct RoutePickerView: UIViewRepresentable { func makeUIView(context: Context) -> AVRoutePickerView { let view = AVRoutePickerView(); view.prioritizesVideoDevices = false; return view }; func updateUIView(_ uiView: AVRoutePickerView, context: Context) {} }
+struct RoutePickerView: UIViewRepresentable {
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let view = AVRoutePickerView()
+        view.prioritizesVideoDevices = false
+        return view
+    }
+
+    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {
+        uiView.tintColor = .label
+        uiView.activeTintColor = .label
+    }
+}
