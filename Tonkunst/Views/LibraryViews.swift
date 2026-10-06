@@ -366,6 +366,7 @@ private struct PlaylistDetail: View {
     @State private var showRename = false
     @State private var showRetry = false
     @State private var name = ""
+    @State private var editMode: EditMode = .inactive
     private var playlist: SavedPlaylist? { library.playlists.first { $0.id == id } }
 
     var body: some View {
@@ -393,27 +394,41 @@ private struct PlaylistDetail: View {
                         Button("Cancel Deletion") { library.cancelDeletion(id) }
                     } else {
                         Section {
-                            Button { store.playPlaylist(playable(playlist.content.tracks)) } label: { Label("Play", systemImage: "play.fill") }
-                                .disabled(playlist.content.tracks.isEmpty)
-                            Button { showSongs = true } label: { Label("Add Songs", systemImage: "plus") }
-                                .disabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    Button { store.playPlaylist(playable(playlist.content.tracks)) } label: {
+                                        HStack(spacing: 5) {
+                                            Image(systemName: "play.fill").font(.caption)
+                                            Text("Play")
+                                        }
+                                    }
+                                        .disabled(playlist.content.tracks.isEmpty)
+                                    Button { showSongs = true } label: {
+                                        HStack(spacing: 5) {
+                                            Image(systemName: "plus").font(.caption)
+                                            Text("Add Songs")
+                                        }
+                                    }
+                                        .disabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
+                                    Button(editMode.isEditing ? "Done" : "Edit") {
+                                        withAnimation { editMode = editMode.isEditing ? .inactive : .active }
+                                    }
+                                    .disabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
+                                    Button("Rename") { name = playlist.content.name; showRename = true }
+                                        .disabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
+                                }
+                                .buttonStyle(.glass)
+                                .tint(.white)
+                                .font(.subheadline)
+                                .padding(.vertical, 4)
+                            }
+                            .defaultScrollAnchor(.center, for: .alignment)
+                            .listRowSeparator(.hidden)
                         }
                         Section {
                             ForEach(Array(playlist.content.tracks.enumerated()), id: \.offset) { index, track in
-                                Button { store.playPlaylist(playable(playlist.content.tracks), startingAt: index) } label: {
-                                    HStack {
-                                        VStack(alignment: .leading) {
-                                            Text(track.title).foregroundStyle(.primary)
-                                            Text(track.artist).font(.caption).foregroundStyle(.secondary)
-                                        }
-                                        Spacer()
-                                        if store.offline.contains(track) { Image(systemName: "arrow.down.circle.fill") }
-                                    }
-                                }
-                                .contextMenu {
-                                    Button(store.offline.contains(track) ? "Remove Download" : "Download Song") {
-                                        Task { await store.toggleDownload(track) }
-                                    }
+                                SongRow(track: track) {
+                                    store.playPlaylist(playable(playlist.content.tracks), startingAt: index)
                                 }
                             }
                             .onDelete { offsets in
@@ -428,17 +443,25 @@ private struct PlaylistDetail: View {
                             }
                             .deleteDisabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
                             .moveDisabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
-                        } footer: {
-                            Text(playlist.content.tracks.isEmpty ? "Add songs to start your playlist." : (playlist.dirty ? "Changes saved on this device. Waiting to sync." : "Synced with Jellyfin. Download songs to play them offline."))
                         }
                     }
                 }
-                .navigationTitle(playlist.content.name)
-                .toolbar {
-                    EditButton().disabled(library.isSyncing || playlist.conflict || playlist.creationUncertain || playlist.deleted)
-                    Button("Rename") { name = playlist.content.name; showRename = true }
-                        .disabled(library.isSyncing || playlist.conflict || playlist.creationUncertain || playlist.deleted)
+                .listStyle(.plain)
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    if !playlist.deleted {
+                        Text(playlist.content.tracks.isEmpty ? "Add songs to start your playlist." : (playlist.dirty ? "Changes saved on this device. Waiting to sync." : "Synced with Jellyfin. Download songs to play them offline."))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Color(.systemBackground))
+                    }
                 }
+                .environment(\.editMode, $editMode)
+                .navigationTitle(playlist.content.name)
+                .navigationBarTitleDisplayMode(.inline)
                 .refreshable { await store.syncPlaylists() }
             } else {
                 ContentUnavailableView("Playlist Removed", systemImage: "music.note.list")

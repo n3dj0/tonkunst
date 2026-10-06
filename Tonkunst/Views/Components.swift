@@ -18,8 +18,11 @@ struct OfflineBadge: View { var body: some View { Image(systemName: "iphone.gen3
 struct SongRow: View {
     @EnvironmentObject private var store: MusicStore
     let track: MediaTrack
+    var action: (() -> Void)? = nil
     var body: some View {
-        Button { store.play(track) } label: {
+        Button {
+            if let action { action() } else { store.play(track) }
+        } label: {
             HStack(spacing: 12) { Artwork(track: track, size: 48); VStack(alignment: .leading, spacing: 3) { Text(track.title).font(.body.weight(.medium)).lineLimit(1); Text("\(track.artist) · \(track.album)").font(.caption).foregroundStyle(.secondary).lineLimit(1) }; Spacer(); if store.offline.contains(track) { OfflineBadge() }; Text(track.formattedDuration).font(.caption.monospacedDigit()).foregroundStyle(.tertiary) }
         }.buttonStyle(.plain).contextMenu { Button(store.offline.contains(track) ? "Remove Download" : "Download for Offline", systemImage: store.offline.contains(track) ? "trash" : "arrow.down.circle") { Task { await store.toggleDownload(track) } } }
     }
