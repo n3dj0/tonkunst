@@ -195,7 +195,7 @@ struct AccountView: View {
 
             HStack(spacing: iconSpacing) {
                 Image(systemName: store.connectionAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .frame(width: iconColumnWidth)
+                    .frame(width: iconColumnWidth, height: iconColumnWidth)
                 Text(store.listenStatus)
             }
             .foregroundStyle(store.connectionAvailable ? .green : .orange)

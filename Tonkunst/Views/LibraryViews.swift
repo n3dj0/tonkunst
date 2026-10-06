@@ -21,7 +21,12 @@ struct LibraryView: View {
                 .presentationDetents([.height(640)])
                 .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $showAccount) { AccountView().environmentObject(store) }
+        .sheet(isPresented: $showAccount) {
+            AccountView()
+                .environmentObject(store)
+                .presentationDetents([.height(560), .large])
+                .presentationDragIndicator(.visible)
+        }
         .onChange(of: store.errorMessage) { _, errorMessage in
             displayedError = errorMessage
             isShowingError = errorMessage != nil
