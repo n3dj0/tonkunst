@@ -49,6 +49,8 @@ struct AccountView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Done") { dismiss() }
+                        .tint(Color.primary)
+                        .foregroundStyle(Color.primary)
                 }
             }
         }
@@ -207,11 +209,12 @@ struct AccountView: View {
                     Image(systemName: "arrow.clockwise")
                     Text("Refresh Library")
                 }
-                .foregroundStyle(.primary)
+                .foregroundStyle(Color.primary)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 6)
             }
             .buttonStyle(.glass)
+            .tint(Color.primary)
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
         } header: {
