@@ -589,7 +589,6 @@ struct SearchView: View {
     @Binding var showAccount: Bool
     @State private var query = ""
     @FocusState private var isSearchFocused: Bool
-    @State private var isBrandVisible = true
     
     private var results: [MediaTrack] {
         store.tracks.filter { $0.matches(query) }
@@ -609,12 +608,12 @@ struct SearchView: View {
                 } else {
                     List(results) { SongRow(track: $0) }
                         .listStyle(.plain)
-                        .tonkunstBrandVisibility($isBrandVisible)
                 }
             }
-            .navigationTitle(isBrandVisible ? "" : "Search")
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query, prompt: "Search your collection")
+            .searchPresentationToolbarBehavior(.avoidHidingContent)
             .searchFocused($isSearchFocused)
             .onAppear {
                 DispatchQueue.main.async {
@@ -626,7 +625,7 @@ struct SearchView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    if isBrandVisible { TonkunstBrand() }
+                    TonkunstBrand()
                 }
                 .sharedBackgroundVisibility(.hidden)
                 ToolbarItemGroup(placement: .topBarTrailing) {
