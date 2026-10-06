@@ -125,7 +125,7 @@ struct SongsView: View {
                     List(songs) { SongRow(track: $0) }
                         .listStyle(.plain)
                         .tonkunstBrandVisibility($isBrandVisible)
-                        .refreshable { await store.refresh() }
+                        .refreshable { await store.refresh(isUserInitiated: true) }
                         .overlay {
                             if songs.isEmpty {
                                 if filter.isEmpty {

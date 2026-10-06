@@ -14,6 +14,8 @@ final class MusicStore: NSObject, ObservableObject {
     @Published private(set) var connectionEnabled = true
     @Published private(set) var isConnecting = false
     @Published var isLoading = false
+    @Published private var manualRefreshAvailableDates: [String: Date] = [:]
+    @Published private var libraryRefreshDates = UserDefaults.standard.dictionary(forKey: "tonkunst.libraryRefreshDates") as? [String: Date] ?? [:]
     @Published private(set) var isRestoringSession = true
     @Published var errorMessage: String?
     @Published var repeatMode: RepeatMode = .off
@@ -42,6 +44,8 @@ final class MusicStore: NSObject, ObservableObject {
     private var isUsingFallbackStream = false
     private var canUseFallbackStream = false
     private var connectionGeneration = 0
+    private var refreshGeneration: Int?
+    private static let manualRefreshCooldown: TimeInterval = 10
     private static let connectionEnabledKey = "tonkunst.connectionEnabled"
 
     override init() {
@@ -113,12 +117,34 @@ final class MusicStore: NSObject, ObservableObject {
         isLoading = false
     }
 
-    func refresh() async {
+    var lastLibraryRefresh: Date? {
+        guard let profile else { return nil }
+        return libraryRefreshDates[profile.id]
+    }
+
+    func refreshCooldownRemaining(at date: Date = Date()) -> Int {
+        guard let profile, let availableAt = manualRefreshAvailableDates[profile.id] else { return 0 }
+        return max(0, Int(ceil(availableAt.timeIntervalSince(date))))
+    }
+
+    func refresh(isUserInitiated: Bool = false) async {
         guard let profile, connectionEnabled else { return }
         let generation = connectionGeneration
+        // Enforce limits here so repeated taps and other refresh controls cannot bypass them.
+        guard refreshGeneration != generation else { return }
+        if isUserInitiated {
+            guard refreshCooldownRemaining() == 0 else { return }
+        }
+        refreshGeneration = generation
         isLoading = true
         errorMessage = nil
-        defer { if connectionGeneration == generation { isLoading = false } }
+        defer {
+            if isUserInitiated {
+                manualRefreshAvailableDates[profile.id] = Date().addingTimeInterval(Self.manualRefreshCooldown)
+            }
+            if refreshGeneration == generation { refreshGeneration = nil }
+            if connectionGeneration == generation { isLoading = false }
+        }
         do {
             let fetchedTracks = try await api.fetchSongs(profile: profile)
             guard self.profile == profile, connectionEnabled, connectionGeneration == generation else { return }
@@ -131,6 +157,9 @@ final class MusicStore: NSObject, ObservableObject {
             }
             connectionAvailable = true
             await syncPlaylists()
+            guard self.profile == profile, connectionEnabled, connectionGeneration == generation else { return }
+            libraryRefreshDates[profile.id] = Date()
+            UserDefaults.standard.set(libraryRefreshDates, forKey: "tonkunst.libraryRefreshDates")
         } catch {
             guard self.profile == profile, connectionEnabled, connectionGeneration == generation else { return }
             connectionAvailable = false

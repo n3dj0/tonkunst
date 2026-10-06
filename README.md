@@ -23,6 +23,8 @@ After a successful sign-in, Tonkunst keeps the server address and Jellyfin acces
 
 The app permits local HTTP because many home Jellyfin servers do not have TLS configured. For distribution, prefer HTTPS whenever your Jellyfin setup supports it.
 
+Manual library refreshes have a 10-second cooldown after each attempt, including failures. The account screen shows a countdown until refreshing is available again. Pull to refresh shares the same limit, and overlapping library requests are ignored. Automatic connection refreshes can run during the manual cooldown.
+
 You can copy downloaded audio from Files. Keep the files in their Tonkunst folders if you want the app to continue playing them offline.
 
 ## Playlists

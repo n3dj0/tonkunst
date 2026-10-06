@@ -27,6 +27,7 @@ struct AccountView: View {
     @State private var username = ""
     @State private var password = ""
     @State private var isAddingNewAccount = false
+    @State private var isShowingRefreshFeedback = false
 
     private var serverAddress: String {
         let host = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -202,27 +203,100 @@ struct AccountView: View {
         }
 
         Section {
-            Button {
-                Task { await store.refresh() }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "arrow.clockwise")
-                    Text("Refresh Library")
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let cooldown = store.refreshCooldownRemaining(at: context.date)
+                Button {
+                    guard !store.isLoading, !isShowingRefreshFeedback,
+                          store.refreshCooldownRemaining() == 0 else { return }
+                    isShowingRefreshFeedback = true
+                    let startedAt = Date()
+                    Task {
+                        await store.refresh(isUserInitiated: true)
+                        // Give even a fast refresh one full, visible animation cycle.
+                        let remaining = max(0, 2.5 - Date().timeIntervalSince(startedAt))
+                        try? await Task.sleep(for: .seconds(remaining))
+                        isShowingRefreshFeedback = false
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.clockwise")
+                        if store.isLoading || isShowingRefreshFeedback {
+                            Text("Refreshing Library…")
+                        } else if cooldown > 0 {
+                            Text("Refresh in \(cooldown)s")
+                                .monospacedDigit()
+                        } else {
+                            Text("Refresh Library")
+                        }
+                    }
+                    .foregroundStyle(Color.primary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
                 }
-                .foregroundStyle(Color.primary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
+                .buttonStyle(.glass)
+                .tint(Color.primary)
+                .disabled(store.isLoading || isShowingRefreshFeedback || cooldown > 0 || !store.connectionEnabled)
             }
-            .buttonStyle(.glass)
-            .tint(Color.primary)
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
         } header: {
             Text("Library")
         } footer: {
-            Text("Downloads appear in Files under On My iPhone → Tonkunst, arranged by artist and album. Remove individual downloads from the Offline tab.")
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 10) {
+                    LibraryRefreshProgressBar(isRefreshing: store.isLoading || isShowingRefreshFeedback)
+
+                    if let refreshedAt = store.lastLibraryRefresh {
+                        Text("Last refreshed: \(refreshedAt.formatted(date: .abbreviated, time: .standard))")
+                    } else {
+                        Text("Last refreshed: Never")
+                    }
+                }
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+
+                Text("Downloads appear in Files under On My iPhone → Tonkunst, arranged by artist and album. Remove individual downloads from the Offline tab.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         }
+    }
+}
+
+private struct LibraryRefreshProgressBar: View {
+    let isRefreshing: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var animationStartedAt = Date()
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.primary.opacity(0.12))
+
+                if isRefreshing {
+                    TimelineView(.animation(paused: reduceMotion)) { context in
+                        let segmentWidth = geometry.size.width * 0.3
+                        let phase = max(0, context.date.timeIntervalSince(animationStartedAt))
+                            .truncatingRemainder(dividingBy: 2.5) / 2.5
+
+                        Capsule()
+                            .fill(Color.accentColor)
+                            .frame(width: segmentWidth)
+                            .offset(x: reduceMotion
+                                    ? (geometry.size.width - segmentWidth) / 2
+                                    : geometry.size.width * phase)
+                    }
+                }
+            }
+            .clipShape(Capsule())
+        }
+        .frame(height: 6)
+        .onChange(of: isRefreshing, initial: true) { _, refreshing in
+            if refreshing { animationStartedAt = Date() }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Library refresh progress")
+        .accessibilityValue(isRefreshing ? "Refreshing" : "Idle")
     }
 }
