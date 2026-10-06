@@ -327,6 +327,7 @@ private struct PlaylistBrowser: View {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     ConnectionPill()
                     Button { name = ""; showCreate = true } label: { Image(systemName: "plus") }
+                        .tint(.white)
                         .accessibilityLabel("New playlist")
                         .disabled(store.profile == nil || library.isSyncing)
                     AccountButton(showAccount: $showAccount)
