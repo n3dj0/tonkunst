@@ -94,13 +94,24 @@ private extension View {
 }
 
 private struct TonkunstBrand: View {
+    @AppStorage(AmbientStyle.storageKey) private var selection = AmbientStyle.standard.rawValue
+    private var style: AmbientStyle { AmbientStyle(rawValue: selection) ?? .standard }
+
     var body: some View {
-        Text("Tonkunst")
-            .font(.system(size: 27, weight: .regular, design: .serif))
-            .tracking(-0.8)
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .accessibilityLabel("Tonkunst")
+        Button { selection = style.next.rawValue } label: {
+            Text("Tonkunst")
+                .font(.system(size: 27, weight: .regular, design: .serif))
+                .tracking(-0.8)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.primary)
+        .accessibilityLabel("Tonkunst")
+        .accessibilityValue("\(style.title) background")
+        .accessibilityHint("Changes the background. Five backgrounds available.")
     }
 }
 
@@ -127,7 +138,9 @@ struct SongsView: View {
                 } else if store.isLoading && store.tracks.isEmpty {
                     ProgressView("Loading your music…")
                 } else {
-                    List(songs) { SongRow(track: $0) }
+                    List(songs) { track in
+                        SongRow(track: track).ambientRows()
+                    }
                         .listStyle(.plain)
                         .tonkunstBrandVisibility($isBrandVisible)
                         .refreshable { await store.refresh(isUserInitiated: true) }
@@ -150,6 +163,7 @@ struct SongsView: View {
                         .pullToSearch(isRevealed: isSearchRevealed, text: $filter, prompt: "Songs, artists, albums")
                 }
             }
+            .ambientScreen()
             .navigationTitle(isBrandVisible ? "" : "Songs")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -183,26 +197,29 @@ struct ArtistsView: View {
     var body: some View {
         NavigationStack {
             List {
-                ForEach(artists, id: \.name) { artist in
-                    NavigationLink {
-                        ArtistTracksView(artist: artist.name, tracks: artist.tracks)
-                    } label: {
-                        HStack {
-                            Circle()
-                                .fill(Color.accentColor.gradient)
-                                .frame(width: 45, height: 45)
-                                .overlay {
-                                    Text(String(artist.name.prefix(1)))
-                                        .font(.title3.weight(.bold))
-                                        .foregroundStyle(.white)
-                                }
-                            Text(artist.name)
-                            Spacer()
-                            Text("\(artist.tracks.count)")
-                                .foregroundStyle(.secondary)
+                Group {
+                    ForEach(artists, id: \.name) { artist in
+                        NavigationLink {
+                            ArtistTracksView(artist: artist.name, tracks: artist.tracks)
+                        } label: {
+                            HStack {
+                                Circle()
+                                    .fill(Color.accentColor.gradient)
+                                    .frame(width: 45, height: 45)
+                                    .overlay {
+                                        Text(String(artist.name.prefix(1)))
+                                            .font(.title3.weight(.bold))
+                                            .foregroundStyle(.white)
+                                    }
+                                Text(artist.name)
+                                Spacer()
+                                Text("\(artist.tracks.count)")
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
+                .ambientRows()
             }
             .listStyle(.plain)
             .tonkunstBrandVisibility($isBrandVisible)
@@ -216,6 +233,7 @@ struct ArtistsView: View {
                     }
                 }
             }
+            .ambientScreen()
             .navigationTitle(isBrandVisible ? "" : "Artists")
             .navigationBarTitleDisplayMode(.inline)
             .pullToSearch(isRevealed: isSearchRevealed, text: $filter, prompt: "Search artists")
@@ -248,11 +266,14 @@ private struct ArtistTracksView: View {
             if filteredTracks.isEmpty {
                 ContentUnavailableView.search(text: filter)
             } else {
-                List(filteredTracks) { SongRow(track: $0) }
+                List(filteredTracks) { track in
+                    SongRow(track: track).ambientRows()
+                }
                     .listStyle(.plain)
                     .revealSearchOnPull($isSearchRevealed)
             }
         }
+        .ambientScreen()
         .navigationTitle(artist)
         .navigationBarTitleDisplayMode(.inline)
         .pullToSearch(isRevealed: isSearchRevealed, text: $filter, prompt: "Songs, albums")
@@ -285,41 +306,44 @@ private struct PlaylistBrowser: View {
     var body: some View {
         NavigationStack {
             List {
-                if let message = library.message {
-                    Section {
-                        Text(message).foregroundStyle(.red)
-                        Button("Retry Sync") { Task { await store.syncPlaylists(isUserInitiated: true) } }
+                Group {
+                    if let message = library.message {
+                        Section {
+                            Text(message).foregroundStyle(.red)
+                            Button("Retry Sync") { Task { await store.syncPlaylists(isUserInitiated: true) } }
+                        }
                     }
-                }
-                ForEach(library.playlists) { playlist in
-                    NavigationLink {
-                        PlaylistDetail(library: library, id: playlist.id)
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "music.note.list")
-                                .font(.title3.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 48, height: 48)
-                                .background(Color.accentColor.gradient, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(playlist.content.name)
-                                    .font(.body.weight(.medium))
-                                    .lineLimit(1)
-                                Text(status(playlist))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
+                    ForEach(library.playlists) { playlist in
+                        NavigationLink {
+                            PlaylistDetail(library: library, id: playlist.id)
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "music.note.list")
+                                    .font(.title3.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 48, height: 48)
+                                    .background(Color.accentColor.gradient, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(playlist.content.name)
+                                        .font(.body.weight(.medium))
+                                        .lineLimit(1)
+                                    Text(status(playlist))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer()
                             }
-                            Spacer()
                         }
-                    }
-                    .swipeActions {
-                        if !playlist.deleted && !playlist.conflict && !playlist.creationUncertain {
-                            Button("Delete", role: .destructive) { deleting = playlist }
-                                .disabled(library.isSyncing)
+                        .swipeActions {
+                            if !playlist.deleted && !playlist.conflict && !playlist.creationUncertain {
+                                Button("Delete", role: .destructive) { deleting = playlist }
+                                    .disabled(library.isSyncing)
+                            }
                         }
                     }
                 }
+                .ambientRows()
             }
             .listStyle(.plain)
             .tonkunstBrandVisibility($isBrandVisible)
@@ -344,6 +368,7 @@ private struct PlaylistBrowser: View {
                 catch { return }
                 showsInitialProgress = true
             }
+            .ambientScreen()
             .navigationTitle(isBrandVisible ? "" : "Playlists")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -353,7 +378,7 @@ private struct PlaylistBrowser: View {
                 .sharedBackgroundVisibility(.hidden)
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button { name = ""; showCreate = true } label: { Image(systemName: "plus") }
-                        .tint(.white)
+                        .tint(.primary)
                         .accessibilityLabel("New playlist")
                         .disabled(store.profile == nil || library.isSyncing)
                     ConnectionPill()
@@ -400,93 +425,85 @@ private struct PlaylistDetail: View {
         Group {
             if let playlist {
                 List {
-                    if playlist.creationUncertain {
-                        Section("Creation needs review") {
-                            Text("Jellyfin may have created this playlist, but the response was lost. Refresh and check the server playlists before trying again to avoid a duplicate.")
-                            Button("Refresh from Jellyfin") { sync() }
-                            Button("Try Creating Again") { showRetry = true }
-                            Button("Discard Device Draft", role: .destructive) { library.resolve(id, keepCopy: false) }
+                    Group {
+                        if playlist.creationUncertain {
+                            Section("Creation needs review") {
+                                Text("Jellyfin may have created this playlist, but the response was lost. Refresh and check the server playlists before trying again to avoid a duplicate.")
+                                Button("Refresh from Jellyfin") { sync() }
+                                Button("Try Creating Again") { showRetry = true }
+                                Button("Discard Device Draft", role: .destructive) { library.resolve(id, keepCopy: false) }
+                            }
                         }
-                    }
-                    if playlist.conflict {
-                        Section("Changes on both devices") {
-                            Text(playlist.remote == nil ? "This playlist was removed from Jellyfin. Your device changes are still here." : "Jellyfin and this device have different changes. Keep the server version, or also save your device version as a new private playlist.")
-                            Button("Keep Both Versions") { library.resolve(id, keepCopy: true); sync() }
-                            Button("Use Server Version", role: .destructive) { library.resolve(id, keepCopy: false) }
+                        if playlist.conflict {
+                            Section("Changes on both devices") {
+                                Text(playlist.remote == nil ? "This playlist was removed from Jellyfin. Your device changes are still here." : "Jellyfin and this device have different changes. Keep the server version, or also save your device version as a new private playlist.")
+                                Button("Keep Both Versions") { library.resolve(id, keepCopy: true); sync() }
+                                Button("Use Server Version", role: .destructive) { library.resolve(id, keepCopy: false) }
+                            }
                         }
-                    }
-                    if let message = library.message { Text(message).foregroundStyle(.red) }
-                    if playlist.deleted {
-                        Text("Waiting to delete from Jellyfin.")
-                        Button("Cancel Deletion") { library.cancelDeletion(id) }
-                    } else {
-                        Section {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 8) {
-                                    Button { store.playPlaylist(playable(playlist.content.tracks)) } label: {
-                                        HStack(spacing: 5) {
-                                            Image(systemName: "play.fill").font(.caption)
-                                            Text("Play")
+                        if let message = library.message { Text(message).foregroundStyle(.red) }
+                        if playlist.deleted {
+                            Text("Waiting to delete from Jellyfin.")
+                            Button("Cancel Deletion") { library.cancelDeletion(id) }
+                        } else {
+                            Section {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 8) {
+                                        Button { store.playPlaylist(playable(playlist.content.tracks)) } label: {
+                                            HStack(spacing: 5) {
+                                                Image(systemName: "play.fill").font(.caption)
+                                                Text("Play")
+                                            }
                                         }
-                                    }
-                                        .disabled(playlist.content.tracks.isEmpty)
-                                    Button { showSongs = true } label: {
-                                        HStack(spacing: 5) {
-                                            Image(systemName: "plus").font(.caption)
-                                            Text("Add Songs")
+                                            .disabled(playlist.content.tracks.isEmpty)
+                                        Button { showSongs = true } label: {
+                                            HStack(spacing: 5) {
+                                                Image(systemName: "plus").font(.caption)
+                                                Text("Add Songs")
+                                            }
                                         }
-                                    }
+                                            .disabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
+                                        Button(editMode.isEditing ? "Done" : "Edit") {
+                                            withAnimation { editMode = editMode.isEditing ? .inactive : .active }
+                                        }
                                         .disabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
-                                    Button(editMode.isEditing ? "Done" : "Edit") {
-                                        withAnimation { editMode = editMode.isEditing ? .inactive : .active }
+                                        Button("Rename") { name = playlist.content.name; showRename = true }
+                                            .disabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
                                     }
-                                    .disabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
-                                    Button("Rename") { name = playlist.content.name; showRename = true }
-                                        .disabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
+                                    .buttonStyle(.glass)
+                                    .tint(.primary)
+                                    .font(.subheadline)
+                                    .padding(.vertical, 4)
                                 }
-                                .buttonStyle(.glass)
-                                .tint(.white)
-                                .font(.subheadline)
-                                .padding(.vertical, 4)
+                                .defaultScrollAnchor(.center, for: .alignment)
+                                .listRowSeparator(.hidden)
                             }
-                            .defaultScrollAnchor(.center, for: .alignment)
-                            .listRowSeparator(.hidden)
-                        }
-                        Section {
-                            ForEach(Array(playlist.content.tracks.enumerated()), id: \.offset) { index, track in
-                                SongRow(track: track) {
-                                    store.playPlaylist(playable(playlist.content.tracks), startingAt: index)
+                            Section {
+                                ForEach(Array(playlist.content.tracks.enumerated()), id: \.offset) { index, track in
+                                    SongRow(track: track) {
+                                        store.playPlaylist(playable(playlist.content.tracks), startingAt: index)
+                                    }
                                 }
+                                .onDelete { offsets in
+                                    var content = playlist.content
+                                    content.tracks.remove(atOffsets: offsets)
+                                    library.edit(id, content: content); sync()
+                                }
+                                .onMove { offsets, destination in
+                                    var content = playlist.content
+                                    content.tracks.move(fromOffsets: offsets, toOffset: destination)
+                                    library.edit(id, content: content); sync()
+                                }
+                                .deleteDisabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
+                                .moveDisabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
                             }
-                            .onDelete { offsets in
-                                var content = playlist.content
-                                content.tracks.remove(atOffsets: offsets)
-                                library.edit(id, content: content); sync()
-                            }
-                            .onMove { offsets, destination in
-                                var content = playlist.content
-                                content.tracks.move(fromOffsets: offsets, toOffset: destination)
-                                library.edit(id, content: content); sync()
-                            }
-                            .deleteDisabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
-                            .moveDisabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
                         }
                     }
+                    .ambientRows()
                 }
                 .listStyle(.plain)
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    if !playlist.deleted {
-                        Text(playlist.content.tracks.isEmpty ? "Add songs to start your playlist." : (playlist.dirty ? "Changes saved on this device. Waiting to sync." : "Synced with Jellyfin. Download songs to play them offline."))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: .infinity)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(Color(.systemBackground))
-                    }
-                }
                 .environment(\.editMode, $editMode)
+                .ambientScreen()
                 .navigationTitle(playlist.content.name)
                 .navigationBarTitleDisplayMode(.inline)
                 .refreshable { await store.syncPlaylists(isUserInitiated: true) }
@@ -536,22 +553,28 @@ private struct PlaylistSongPicker: View {
     var body: some View {
         NavigationStack {
             List(songs) { track in
-                Button {
-                    if selected.contains(where: { $0.id == track.id }) { selected.removeAll { $0.id == track.id } }
-                    else { selected.append(track) }
-                } label: {
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text(track.title).foregroundStyle(.primary)
-                            Text(track.artist).font(.caption).foregroundStyle(.secondary)
+                Group {
+                    Button {
+                        if selected.contains(where: { $0.id == track.id }) { selected.removeAll { $0.id == track.id } }
+                        else { selected.append(track) }
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(track.title).foregroundStyle(.primary)
+                                Text(track.artist).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if selected.contains(where: { $0.id == track.id }) { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
                         }
-                        Spacer()
-                        if selected.contains(where: { $0.id == track.id }) { Image(systemName: "checkmark") }
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                 }
+                .ambientRows()
             }
             .overlay { if songs.isEmpty { ContentUnavailableView("No Songs", systemImage: "music.note", description: Text("Connect to Jellyfin to load your music library.")) } }
             .searchable(text: $query, prompt: "Songs, artists, albums")
+            .ambientScreen()
             .navigationTitle("Add Songs")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -587,12 +610,15 @@ struct OfflineView: View {
                 } else if offlineTracks.isEmpty {
                     ContentUnavailableView.search(text: filter)
                 } else {
-                    List(offlineTracks) { SongRow(track: $0) }
+                    List(offlineTracks) { track in
+                        SongRow(track: track).ambientRows()
+                    }
                         .listStyle(.plain)
                         .tonkunstBrandVisibility($isBrandVisible)
                         .revealSearchOnPull($isSearchRevealed)
                 }
             }
+            .ambientScreen()
             .navigationTitle(isBrandVisible ? "" : "Offline")
             .navigationBarTitleDisplayMode(.inline)
             .pullToSearch(isRevealed: isSearchRevealed, text: $filter, prompt: "Songs, artists, albums")
@@ -632,10 +658,13 @@ struct SearchView: View {
                 } else if results.isEmpty {
                     ContentUnavailableView.search(text: query)
                 } else {
-                    List(results) { SongRow(track: $0) }
+                    List(results) { track in
+                        SongRow(track: track).ambientRows()
+                    }
                         .listStyle(.plain)
                 }
             }
+            .ambientScreen()
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query, prompt: "Search your collection")

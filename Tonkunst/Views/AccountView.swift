@@ -39,12 +39,16 @@ struct AccountView: View {
     var body: some View {
         NavigationStack {
             Form {
-                if let profile = store.profile {
-                    signedInSettings(profile)
-                } else {
-                    signedOutSettings
+                Group {
+                    if let profile = store.profile {
+                        signedInSettings(profile)
+                    } else {
+                        signedOutSettings
+                    }
                 }
+                .ambientRows()
             }
+            .ambientScreen()
             .navigationTitle("Account & Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -74,7 +78,7 @@ struct AccountView: View {
                                     .font(.headline)
                                 Text(profile.baseURL)
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(Color.secondary)
                             }
                             Spacer()
                             Image(systemName: "chevron.right")
@@ -175,7 +179,7 @@ struct AccountView: View {
                         .font(.headline)
                     Text(profile.baseURL)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.secondary)
                         .lineLimit(2)
                         .truncationMode(.middle)
                 }
@@ -253,11 +257,11 @@ struct AccountView: View {
                     }
                 }
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.secondary)
 
                 Text("Downloads appear in Files under On My iPhone → Tonkunst, arranged by artist and album. Remove individual downloads from the Offline tab.")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.secondary)
             }
         }
     }

@@ -40,3 +40,11 @@ If both the device and server changed a playlist since the last sync, open it to
 Playlist updates use Jellyfin's `POST /Playlists/{id}` endpoint with the name and ordered song IDs, leaving sharing settings unchanged. Servers must support that update endpoint. Conflict checks compare the last synced version with the fetched server version; Jellyfin does not provide an atomic compare-and-swap here, so simultaneous edits during a sync can still race.
 
 Run the offline sync regression tests with `Tests/run-playlist-tests.sh` on macOS. These exercise the real persistence and sync coordinator with a mock server; live Jellyfin integration needs a connected server.
+
+## Ambient backgrounds
+
+Tap the **Tonkunst** wordmark in any tab's header to cycle through Standard → Aurora → Dusk → Lagoon → Ember → Standard. The selection is saved on the device and shared across tabs, detail screens, and sheets. Standard retains the system light/dark background; each gradient adapts to the current appearance and drifts over a two-minute cycle.
+
+The wordmark remains visually unchanged and is a labeled, 44-point-high button for VoiceOver and other assistive controls. Reduce Motion freezes the gradient. Reduce Transparency freezes and further mutes it; Increase Contrast strengthens the neutral background overlay. Animation pauses while the app is inactive. Gradient modes make list and form rows transparent so the animation covers the entire screen, including beneath Liquid Glass controls. Standard restores the native row backgrounds.
+
+For visual QA, cycle all five choices in light and dark mode, including populated lists, search results, playlist editing and Add Songs, Account & Settings, and Now Playing. Check persistence after relaunch, VoiceOver's background value, and the Reduce Motion, Reduce Transparency, and Increase Contrast settings.

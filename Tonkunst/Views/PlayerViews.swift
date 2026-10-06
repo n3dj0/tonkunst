@@ -45,7 +45,7 @@ struct NowPlayingView: View {
                         VStack(spacing: 6) {
                             Text(track.title).font(.title2.weight(.bold)).multilineTextAlignment(.center)
                             Text(track.artist).foregroundStyle(.secondary)
-                            Text(track.album).font(.subheadline).foregroundStyle(.tertiary)
+                            Text(track.album).font(.subheadline).foregroundStyle(.secondary)
                         }
                         .padding(.horizontal, 26)
                         VStack(spacing: 7) {
@@ -96,6 +96,7 @@ struct NowPlayingView: View {
                     }
                 }
             }
+            .ambientScreen()
             .navigationTitle("Now Playing")
             .navigationBarTitleDisplayMode(.inline)
         }
