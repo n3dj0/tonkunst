@@ -269,6 +269,7 @@ private struct PlaylistBrowser: View {
     @State private var showCreate = false
     @State private var name = ""
     @State private var deleting: SavedPlaylist?
+    @State private var isBrandVisible = true
 
     var body: some View {
         NavigationStack {
@@ -281,9 +282,22 @@ private struct PlaylistBrowser: View {
                     NavigationLink {
                         PlaylistDetail(library: library, id: playlist.id)
                     } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(playlist.content.name)
-                            Text(status(playlist)).font(.caption).foregroundStyle(.secondary)
+                        HStack(spacing: 12) {
+                            Image(systemName: "music.note.list")
+                                .font(.title3.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 48, height: 48)
+                                .background(Color.accentColor.gradient, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(playlist.content.name)
+                                    .font(.body.weight(.medium))
+                                    .lineLimit(1)
+                                Text(status(playlist))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
                         }
                     }
                     .swipeActions {
@@ -294,6 +308,8 @@ private struct PlaylistBrowser: View {
                     }
                 }
             }
+            .listStyle(.plain)
+            .tonkunstBrandVisibility($isBrandVisible)
             .overlay {
                 if library.playlists.isEmpty && !library.isSyncing && library.message == nil {
                     ContentUnavailableView("Your Playlists", systemImage: "music.note.list",
@@ -301,8 +317,13 @@ private struct PlaylistBrowser: View {
                 }
             }
             .refreshable { await store.syncPlaylists() }
-            .navigationTitle("Playlists")
+            .navigationTitle(isBrandVisible ? "" : "Playlists")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if isBrandVisible { TonkunstBrand() }
+                }
+                .sharedBackgroundVisibility(.hidden)
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     ConnectionPill()
                     Button { name = ""; showCreate = true } label: { Image(systemName: "plus") }
