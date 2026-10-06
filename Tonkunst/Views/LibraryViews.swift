@@ -347,11 +347,11 @@ private struct PlaylistBrowser: View {
                 }
                 .sharedBackgroundVisibility(.hidden)
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    ConnectionPill()
                     Button { name = ""; showCreate = true } label: { Image(systemName: "plus") }
                         .tint(.white)
                         .accessibilityLabel("New playlist")
                         .disabled(store.profile == nil || library.isSyncing)
+                    ConnectionPill()
                     AccountButton(showAccount: $showAccount)
                 }
             }
