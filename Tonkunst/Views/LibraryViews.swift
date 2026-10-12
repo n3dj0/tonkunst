@@ -46,29 +46,57 @@ struct LibraryView: View {
     }
 }
 
+private struct MiniPlayerClearanceKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
+private extension EnvironmentValues {
+    var miniPlayerClearance: CGFloat {
+        get { self[MiniPlayerClearanceKey.self] }
+        set { self[MiniPlayerClearanceKey.self] = newValue }
+    }
+}
+
 private struct MiniPlayerContainer: ViewModifier {
     @EnvironmentObject private var store: MusicStore
     @Binding var expanded: Bool
+    @State private var playerHeight: CGFloat = 0
 
     func body(content: Content) -> some View {
-        // Reserve real layout space outside the navigation stack. An outer
-        // safe-area inset can be lost when the stack lays out its lists.
-        VStack(spacing: 0) {
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if store.currentTrack != nil {
-                MiniPlayer(expanded: $expanded)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
+        content
+            .environment(\.miniPlayerClearance, store.currentTrack == nil ? 0 : playerHeight)
+            .overlay(alignment: .bottom) {
+                if store.currentTrack != nil {
+                    MiniPlayer(expanded: $expanded)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .onGeometryChange(for: CGFloat.self) { proxy in
+                            proxy.size.height
+                        } action: { height in
+                            playerHeight = height
+                        }
+                }
             }
-        }
-        .ambientScreen()
+    }
+}
+
+private struct MiniPlayerScrollClearance: ViewModifier {
+    @Environment(\.miniPlayerClearance) private var clearance
+
+    func body(content: Content) -> some View {
+        // Extend the scrollable content without shrinking the list's viewport:
+        // rows still pass behind the floating glass, and the last row clears it.
+        content.contentMargins(.bottom, clearance, for: .scrollContent)
     }
 }
 
 private extension View {
     func miniPlayerContainer(expanded: Binding<Bool>) -> some View {
         modifier(MiniPlayerContainer(expanded: expanded))
+    }
+
+    func miniPlayerScrollClearance() -> some View {
+        modifier(MiniPlayerScrollClearance())
     }
 }
 
@@ -165,6 +193,7 @@ struct SongsView: View {
                         SongRow(track: track).ambientRows()
                     }
                         .listStyle(.plain)
+                        .miniPlayerScrollClearance()
                         .tonkunstBrandVisibility($isBrandVisible)
                         .refreshable { await store.refresh(isUserInitiated: true) }
                         .overlay {
@@ -246,6 +275,7 @@ struct ArtistsView: View {
                 .ambientRows()
             }
             .listStyle(.plain)
+            .miniPlayerScrollClearance()
             .tonkunstBrandVisibility($isBrandVisible)
             .revealSearchOnPull($isSearchRevealed)
             .overlay {
@@ -296,6 +326,7 @@ private struct ArtistTracksView: View {
                     SongRow(track: track).ambientRows()
                 }
                     .listStyle(.plain)
+                    .miniPlayerScrollClearance()
                     .revealSearchOnPull($isSearchRevealed)
             }
         }
@@ -372,6 +403,7 @@ private struct PlaylistBrowser: View {
                 .ambientRows()
             }
             .listStyle(.plain)
+            .miniPlayerScrollClearance()
             .tonkunstBrandVisibility($isBrandVisible)
             .overlay {
                 if needsInitialProgress && showsInitialProgress {
@@ -534,6 +566,7 @@ private struct PlaylistDetail: View {
                     .ambientRows()
                 }
                 .listStyle(.plain)
+                .miniPlayerScrollClearance()
                 .environment(\.editMode, $editMode)
                 .ambientScreen()
                 .navigationTitle(playlist.content.name)
@@ -646,6 +679,7 @@ struct OfflineView: View {
                         SongRow(track: track).ambientRows()
                     }
                         .listStyle(.plain)
+                        .miniPlayerScrollClearance()
                         .tonkunstBrandVisibility($isBrandVisible)
                         .revealSearchOnPull($isSearchRevealed)
                 }
@@ -695,6 +729,7 @@ struct SearchView: View {
                         SongRow(track: track).ambientRows()
                     }
                         .listStyle(.plain)
+                        .miniPlayerScrollClearance()
                 }
             }
             .libraryHeaderSpacing()
