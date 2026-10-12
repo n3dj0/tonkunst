@@ -10,11 +10,11 @@ struct LibraryView: View {
     @State private var isShowingError = false
     var body: some View {
         TabView(selection: $selectedTab) {
-            SongsView(showAccount: $showAccount).miniPlayerInset(expanded: $showPlayer).tabItem { Label("Songs", systemImage: "music.note.list") }.tag(0)
-            ArtistsView(showAccount: $showAccount).miniPlayerInset(expanded: $showPlayer).tabItem { Label("Artists", systemImage: "person.2") }.tag(1)
-            PlaylistsView(showAccount: $showAccount).miniPlayerInset(expanded: $showPlayer).tabItem { Label("Playlists", systemImage: "music.note.list") }.tag(2)
-            OfflineView(showAccount: $showAccount).miniPlayerInset(expanded: $showPlayer).tabItem { Label("Offline", systemImage: "iphone.gen3") }.tag(3)
-            SearchView(showAccount: $showAccount).miniPlayerInset(expanded: $showPlayer).tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(4)
+            SongsView(showAccount: $showAccount).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Songs", systemImage: "music.note.list") }.tag(0)
+            ArtistsView(showAccount: $showAccount).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Artists", systemImage: "person.2") }.tag(1)
+            PlaylistsView(showAccount: $showAccount).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Playlists", systemImage: "music.note.list") }.tag(2)
+            OfflineView(showAccount: $showAccount).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Offline", systemImage: "iphone.gen3") }.tag(3)
+            SearchView(showAccount: $showAccount).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(4)
         }
         .sheet(isPresented: $showPlayer) {
             NowPlayingView()
@@ -46,15 +46,29 @@ struct LibraryView: View {
     }
 }
 
-private extension View {
-    /// Keeps the custom Liquid Glass player above the tab bar without
-    /// allocating any space until `MiniPlayer` has a current track to show.
-    func miniPlayerInset(expanded: Binding<Bool>) -> some View {
-        safeAreaInset(edge: .bottom, spacing: 8) {
-            MiniPlayer(expanded: expanded)
-                .padding(.horizontal, 10)
-                .padding(.bottom, 8)
+private struct MiniPlayerContainer: ViewModifier {
+    @EnvironmentObject private var store: MusicStore
+    @Binding var expanded: Bool
+
+    func body(content: Content) -> some View {
+        // Reserve real layout space outside the navigation stack. An outer
+        // safe-area inset can be lost when the stack lays out its lists.
+        VStack(spacing: 0) {
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if store.currentTrack != nil {
+                MiniPlayer(expanded: $expanded)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+            }
         }
+        .ambientScreen()
+    }
+}
+
+private extension View {
+    func miniPlayerContainer(expanded: Binding<Bool>) -> some View {
+        modifier(MiniPlayerContainer(expanded: expanded))
     }
 }
 
