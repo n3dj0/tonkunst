@@ -7,7 +7,7 @@ import SwiftUI
 final class MusicStore: NSObject, ObservableObject {
     @Published var profile: ServerProfile?
     @Published private(set) var savedProfiles: [ServerProfile] = []
-    @Published var tracks: [MediaTrack] = []
+    @Published private var cachedTracks: [MediaTrack] = []
     @Published var currentTrack: MediaTrack?
     @Published var isPlaying = false
     @Published var connectionAvailable = false
@@ -72,7 +72,7 @@ final class MusicStore: NSObject, ObservableObject {
             errorMessage = error.localizedDescription
         }
         playlistLibrary.activate(profile)
-        tracks = playlistLibrary.catalog
+        cachedTracks = playlistLibrary.catalog
         isRestoringSession = false
         if profile != nil && connectionEnabled {
             await refresh()
@@ -88,9 +88,16 @@ final class MusicStore: NSObject, ObservableObject {
         if let didFailToFinishObserver { NotificationCenter.default.removeObserver(didFailToFinishObserver) }
     }
 
+    // Keep metadata for reconnection, but only expose playable songs to browsing.
+    var tracks: [MediaTrack] { connectionAvailable ? cachedTracks : offlineTracks }
+
+    func canPlay(_ track: MediaTrack) -> Bool {
+        offline.contains(track) || (connectionAvailable && track.streamURL != nil)
+    }
+
     var offlineTracks: [MediaTrack] {
-        let visibleIDs = Set(tracks.map(\.id))
-        return tracks.filter { offline.contains($0) } + offline.tracks.filter { !visibleIDs.contains($0.id) }
+        let visibleIDs = Set(cachedTracks.map(\.id))
+        return cachedTracks.filter { offline.contains($0) } + offline.tracks.filter { !visibleIDs.contains($0.id) }
     }
     var listenStatus: String {
         if profile != nil && !connectionEnabled { return "Disconnected from Jellyfin" }
@@ -106,7 +113,7 @@ final class MusicStore: NSObject, ObservableObject {
             connectionGeneration += 1
             connectionEnabled = true
             UserDefaults.standard.set(true, forKey: Self.connectionEnabledKey)
-            if profile?.id != authenticatedProfile.id { stop(); tracks = [] }
+            if profile?.id != authenticatedProfile.id { stop(); cachedTracks = [] }
             profile = authenticatedProfile
             playlistLibrary.activate(profile)
             await refresh()
@@ -152,7 +159,7 @@ final class MusicStore: NSObject, ObservableObject {
             guard self.profile == profile, connectionEnabled, connectionGeneration == generation else { return }
             playlistLibrary.cacheTracks(fetchedTracks, profile: profile)
             offline.reconcile(with: fetchedTracks)
-            tracks = fetchedTracks.map { item in
+            cachedTracks = fetchedTracks.map { item in
                 var item = item
                 item.isDownloaded = offline.contains(item)
                 return item
@@ -165,7 +172,7 @@ final class MusicStore: NSObject, ObservableObject {
         } catch {
             guard self.profile == profile, connectionEnabled, connectionGeneration == generation else { return }
             connectionAvailable = false
-            errorMessage = error.localizedDescription
+            if isUserInitiated { errorMessage = "Jellyfin is unavailable. Downloaded songs are still available offline." }
         }
     }
 
@@ -180,7 +187,7 @@ final class MusicStore: NSObject, ObservableObject {
         KeychainStore.activate(savedProfile)
         profile = savedProfile
         playlistLibrary.activate(profile)
-        tracks = []
+        cachedTracks = []
         connectionAvailable = false
         errorMessage = nil
         Task {
@@ -238,7 +245,7 @@ final class MusicStore: NSObject, ObservableObject {
         UserDefaults.standard.set(true, forKey: Self.connectionEnabledKey)
         KeychainStore.signOut()
         playlistLibrary.activate(nil)
-        profile = nil; tracks = []; connectionAvailable = false; errorMessage = nil
+        profile = nil; cachedTracks = []; connectionAvailable = false; errorMessage = nil
     }
 
     func syncPlaylists(isUserInitiated: Bool = false) async {
@@ -260,8 +267,11 @@ final class MusicStore: NSObject, ObservableObject {
 
     func playPlaylist(_ tracks: [MediaTrack], startingAt index: Int = 0) {
         guard tracks.indices.contains(index) else { return }
-        playbackQueue = tracks
-        playbackOrder.reset(count: tracks.count, startingAt: index, shuffled: isShuffled)
+        guard canPlay(tracks[index]) else { return }
+        let playableTracks = tracks.filter(canPlay)
+        let playableIndex = tracks.prefix(index).filter(canPlay).count
+        playbackQueue = playableTracks
+        playbackOrder.reset(count: playableTracks.count, startingAt: playableIndex, shuffled: isShuffled)
         stopPlayerOnly()
         currentTrack = nil
         play(tracks[index], preservingQueue: true)
@@ -269,10 +279,10 @@ final class MusicStore: NSObject, ObservableObject {
 
     func play(_ track: MediaTrack, preservingQueue: Bool = false) {
         let localSource = offline.localURL(for: track)
-        guard let source = localSource ?? (connectionAvailable ? track.streamURL : nil) else { errorMessage = "This song is not downloaded and Jellyfin is unavailable."; return }
+        guard let source = localSource ?? (connectionAvailable ? track.streamURL : nil) else { return }
         if currentTrack?.id == track.id, player != nil { togglePlay(); return }
         if !preservingQueue {
-            let queue = tracks.contains(where: { $0.id == track.id }) ? tracks : [track]
+            let queue = tracks.contains(where: { $0.id == track.id }) ? tracks.filter(canPlay) : [track]
             playbackQueue = queue
             playbackOrder.reset(count: queue.count, startingAt: queue.firstIndex { $0.id == track.id } ?? 0, shuffled: isShuffled)
         }
@@ -320,7 +330,7 @@ final class MusicStore: NSObject, ObservableObject {
 
     private func advancePlayback(afterFinishing: Bool) {
         guard let queue = playbackQueue,
-              let index = playbackOrder.advance(repeatMode: repeatMode, afterFinishing: afterFinishing) else {
+              let index = nextPlayableIndex(in: queue, afterFinishing: afterFinishing) else {
             if afterFinishing {
                 player?.pause()
                 hasFinishedPlayback = true
@@ -339,6 +349,14 @@ final class MusicStore: NSObject, ObservableObject {
         }
     }
 
+    private func nextPlayableIndex(in queue: [MediaTrack], afterFinishing: Bool) -> Int? {
+        for _ in queue.indices {
+            guard let index = playbackOrder.advance(repeatMode: repeatMode, afterFinishing: afterFinishing) else { return nil }
+            if canPlay(queue[index]) { return index }
+        }
+        return nil
+    }
+
     private func playQueueTrack(_ track: MediaTrack) {
         // Restart even when adjacent playlist occurrences refer to the same song.
         stopPlayerOnly()
@@ -349,11 +367,14 @@ final class MusicStore: NSObject, ObservableObject {
     func previous() {
         if progress > 4 { seek(to: 0); return }
         guard let queue = playbackQueue else { return }
-        if let index = playbackOrder.previous(repeatMode: repeatMode) {
-            playQueueTrack(queue[index])
-        } else {
-            seek(to: 0)
+        for _ in queue.indices {
+            guard let index = playbackOrder.previous(repeatMode: repeatMode) else { break }
+            if canPlay(queue[index]) {
+                playQueueTrack(queue[index])
+                return
+            }
         }
+        seek(to: 0)
     }
 
     func toggleShuffle() {
@@ -366,14 +387,14 @@ final class MusicStore: NSObject, ObservableObject {
     func toggleDownload(_ track: MediaTrack) async {
         if offline.contains(track) {
             offline.remove(track)
-            tracks = tracks.map { var value = $0; value.isDownloaded = offline.contains(value); return value }
+            cachedTracks = cachedTracks.map { var value = $0; value.isDownloaded = offline.contains(value); return value }
         }
         else {
             guard connectionEnabled && connectionAvailable else {
                 errorMessage = "Connect to Jellyfin to download songs."
                 return
             }
-            do { try await offline.download(track); tracks = tracks.map { var value = $0; value.isDownloaded = offline.contains(value); return value } }
+            do { try await offline.download(track); cachedTracks = cachedTracks.map { var value = $0; value.isDownloaded = offline.contains(value); return value } }
             catch { errorMessage = "Download failed: \(error.localizedDescription)" }
         }
     }
@@ -435,14 +456,36 @@ final class MusicStore: NSObject, ObservableObject {
     private func handlePlaybackFailure(_ error: Error?, trackID: String) {
         guard currentTrack?.id == trackID else { return }
         isPlaying = false
-        if !isUsingFallbackStream { connectionAvailable = false }
-        if canUseFallbackStream, !isUsingFallbackStream, let fallbackURL = currentTrack?.fallbackStreamURL {
-            isUsingFallbackStream = true
-            stopPlayerOnly()
-            startPlayer(source: fallbackURL, for: currentTrack!)
+        let failedTrack = currentTrack!
+        let wasStreaming = canUseFallbackStream
+        let wasFallback = isUsingFallbackStream
+        let generation = connectionGeneration
+        stopPlayerOnly() // Detach both failure observers before handling this failure.
+        updateNowPlaying()
+        guard wasStreaming, let profile else {
+            errorMessage = "This download could not be played. Remove it and download the song again."
             return
         }
-        errorMessage = "This song could not be played\(error.map { ": \($0.localizedDescription)" } ?? ".")"
+        Task {
+            do {
+                try await api.ping(profile: profile)
+                guard connectionGeneration == generation, currentTrack?.id == trackID, player == nil else { return }
+                guard connectionEnabled else { return }
+                connectionAvailable = true
+                if !wasFallback, let fallbackURL = failedTrack.fallbackStreamURL {
+                    isUsingFallbackStream = true
+                    startPlayer(source: fallbackURL, for: failedTrack)
+                } else {
+                    errorMessage = "Jellyfin could not play this song. Try another song or download it again later."
+                }
+            } catch {
+                guard connectionGeneration == generation, currentTrack?.id == trackID, player == nil else { return }
+                connectionAvailable = false
+                // Losing the home server is an expected offline transition.
+                currentTrack = nil
+                updateNowPlaying()
+            }
+        }
     }
 
     private func stopPlayerOnly() {
@@ -458,6 +501,12 @@ final class MusicStore: NSObject, ObservableObject {
         player = nil
     }
 
+    func recheckConnection() {
+        guard didStart, !isRestoringSession, profile != nil, connectionEnabled else { return }
+        connectionAvailable = false
+        startConnectionMonitoring()
+    }
+
     private func startConnectionMonitoring() {
         guard connectionEnabled else { return }
         let generation = connectionGeneration
@@ -465,7 +514,10 @@ final class MusicStore: NSObject, ObservableObject {
             pathMonitor.pathUpdateHandler = { [weak self] path in
                 Task { @MainActor in
                     guard let self else { return }
-                    if path.status != .satisfied { self.connectionAvailable = false }
+                    self.connectionAvailable = false
+                    if path.status == .satisfied && self.connectionEnabled {
+                        self.startConnectionMonitoring()
+                    }
                 }
             }
             pathMonitor.start(queue: pathMonitorQueue)

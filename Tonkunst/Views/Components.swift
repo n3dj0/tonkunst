@@ -24,7 +24,7 @@ struct SongRow: View {
             if let action { action() } else { store.play(track) }
         } label: {
             HStack(spacing: 12) { Artwork(track: track, size: 48); VStack(alignment: .leading, spacing: 3) { Text(track.title).font(.body.weight(.medium)).lineLimit(1); Text("\(track.artist) · \(track.album)").font(.caption).foregroundStyle(.secondary).lineLimit(1) }; Spacer(); if store.offline.contains(track) { OfflineBadge() }; Text(track.formattedDuration).font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
-        }.buttonStyle(.plain).contextMenu { Button(store.offline.contains(track) ? "Remove Download" : "Download for Offline", systemImage: store.offline.contains(track) ? "trash" : "arrow.down.circle") { Task { await store.toggleDownload(track) } } }
+        }.buttonStyle(.plain).disabled(!store.canPlay(track)).contextMenu { Button(store.offline.contains(track) ? "Remove Download" : "Download for Offline", systemImage: store.offline.contains(track) ? "trash" : "arrow.down.circle") { Task { await store.toggleDownload(track) } } }
     }
 }
 

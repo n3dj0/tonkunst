@@ -2,6 +2,7 @@ import SwiftUI
 
 struct LibraryView: View {
     @EnvironmentObject private var store: MusicStore
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab = 0
     @State private var showPlayer = false
     @State private var showAccount = false
@@ -26,6 +27,9 @@ struct LibraryView: View {
                 .environmentObject(store)
                 .presentationDetents([.height(560), .large])
                 .presentationDragIndicator(.visible)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { store.recheckConnection() }
         }
         .onChange(of: store.errorMessage) { _, errorMessage in
             displayedError = errorMessage
@@ -153,11 +157,11 @@ struct SongsView: View {
                             if songs.isEmpty {
                                 if filter.isEmpty {
                                     ContentUnavailableView(
-                                        "No Songs Yet",
+                                        store.connectionAvailable ? "No Songs Yet" : "No Downloaded Songs",
                                         systemImage: "music.note",
                                         description: Text(store.connectionAvailable
                                             ? "Your Jellyfin music library is empty."
-                                            : "Connect to Jellyfin to browse your music.")
+                                            : "Connect to Jellyfin and download songs to listen offline.")
                                     )
                                 } else {
                                     ContentUnavailableView.search(text: filter)
@@ -259,13 +263,14 @@ struct ArtistsView: View {
 }
 
 private struct ArtistTracksView: View {
+    @EnvironmentObject private var store: MusicStore
     let artist: String
     let tracks: [MediaTrack]
     @State private var filter = ""
     @State private var isSearchRevealed = false
 
     private var filteredTracks: [MediaTrack] {
-        filter.isEmpty ? tracks : tracks.filter { $0.matches(filter) }
+        tracks.filter { store.canPlay($0) && (filter.isEmpty || $0.matches(filter)) }
     }
 
     var body: some View {
@@ -457,13 +462,13 @@ private struct PlaylistDetail: View {
                             Section {
                                 ScrollView(.horizontal, showsIndicators: false) {
                                     HStack(spacing: 8) {
-                                        Button { store.playPlaylist(playable(playlist.content.tracks)) } label: {
+                                        Button { store.playPlaylist(playable(playlist.content.tracks).filter(store.canPlay)) } label: {
                                             HStack(spacing: 5) {
                                                 Image(systemName: "play.fill").font(.caption)
                                                 Text("Play")
                                             }
                                         }
-                                            .disabled(playlist.content.tracks.isEmpty)
+                                            .disabled(!playlist.content.tracks.contains(where: store.canPlay))
                                         Button { showSongs = true } label: {
                                             HStack(spacing: 5) {
                                                 Image(systemName: "plus").font(.caption)
@@ -485,6 +490,11 @@ private struct PlaylistDetail: View {
                                 }
                                 .defaultScrollAnchor(.center, for: .alignment)
                                 .listRowSeparator(.hidden)
+                            }
+                            if !store.connectionAvailable {
+                                Text("Only downloaded songs can play offline.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
                             }
                             Section {
                                 ForEach(Array(playlist.content.tracks.enumerated()), id: \.offset) { index, track in
@@ -556,7 +566,7 @@ private struct PlaylistSongPicker: View {
     private var songs: [MediaTrack] {
         let tracks = store.tracks + store.playlistLibrary.catalog + store.playlistLibrary.playlists.flatMap { $0.content.tracks }
         var seen = Set<String>()
-        return tracks.filter { seen.insert($0.id).inserted && (query.isEmpty || $0.matches(query)) }
+        return tracks.filter { store.canPlay($0) && seen.insert($0.id).inserted && (query.isEmpty || $0.matches(query)) }
     }
     var body: some View {
         NavigationStack {

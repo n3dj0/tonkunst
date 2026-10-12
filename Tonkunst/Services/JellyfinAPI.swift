@@ -172,7 +172,7 @@ struct JellyfinAPI: PlaylistRemoteServing {
     /// network route. This catches leaving a LAN while cellular remains active.
     func ping(profile: ServerProfile) async throws {
         guard let base = profile.normalizedBaseURL else { throw JellyfinError.invalidServer }
-        var request = URLRequest(url: base.appendingPathComponent("System/Ping"))
+        var request = URLRequest(url: base.appendingPathComponent("System/Ping"), cachePolicy: .reloadIgnoringLocalCacheData)
         request.timeoutInterval = min(requestTimeout, 5)
         request.setValue(authHeader(token: profile.accessToken), forHTTPHeaderField: "Authorization")
         let (_, response) = try await data(for: request)
