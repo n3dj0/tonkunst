@@ -79,15 +79,33 @@ final class PlaylistLibrary: ObservableObject {
     private let api: any PlaylistRemoteServing
     private let fileURL: URL
 
-    init(fileURL: URL? = nil, api: any PlaylistRemoteServing = JellyfinAPI()) {
+    init(fileURL: URL? = nil, api: any PlaylistRemoteServing = JellyfinAPI(), deferRestore: Bool = false) {
         self.api = api
         self.fileURL = fileURL ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Tonkunst/playlists.json")
+        if !deferRestore { restoreSynchronously() }
+    }
+
+    private func restoreSynchronously() {
         do {
             if FileManager.default.fileExists(atPath: self.fileURL.path) {
                 archive = try JSONDecoder().decode(Archive.self, from: Data(contentsOf: self.fileURL))
             }
         } catch {
+            storageAvailable = false
+            message = "Saved playlists could not be read. \(error.localizedDescription)"
+        }
+    }
+
+    func restore() async {
+        let url = fileURL
+        let result = await Task.detached(priority: .userInitiated) {
+            if !FileManager.default.fileExists(atPath: url.path) { return Archive() }
+            return try JSONDecoder().decode(Archive.self, from: Data(contentsOf: url))
+        }.result
+        switch result {
+        case .success(let restored): archive = restored
+        case .failure(let error):
             storageAvailable = false
             message = "Saved playlists could not be read. \(error.localizedDescription)"
         }

@@ -18,18 +18,18 @@ final class MusicStore: NSObject, ObservableObject {
     @Published private var libraryRefreshDates = UserDefaults.standard.dictionary(forKey: "tonkunst.libraryRefreshDates") as? [String: Date] ?? [:]
     @Published private(set) var isRestoringSession = true
     @Published var errorMessage: String?
-    @Published var repeatMode: RepeatMode = .off
-    @Published var isShuffled = false
+    @Published private(set) var repeatMode: RepeatMode = .off
+    @Published private(set) var isShuffled = false
     @Published var progress: Double = 0
     @Published var playbackDuration: Double = 0
     let offline = OfflineLibrary()
-    let playlistLibrary = PlaylistLibrary()
+    let playlistLibrary = PlaylistLibrary(deferRestore: true)
     private var playbackQueue: [MediaTrack]?
-    private var playbackQueueIndex = 0
+    private var playbackOrder = PlaybackOrder()
     private var lastPlaylistSync = Date.distantPast
     private var playlistRefreshAvailableDates: [String: Date] = [:]
 
-    enum RepeatMode: String { case off, all, one }
+    typealias RepeatMode = PlaybackRepeatMode
     private let api = JellyfinAPI()
     private let audioSessionQueue = DispatchQueue(label: "com.tonkunst.audio-session", qos: .userInitiated)
     private var player: AVPlayer?
@@ -44,38 +44,39 @@ final class MusicStore: NSObject, ObservableObject {
     private var serverHealthTask: Task<Void, Never>?
     private var isUsingFallbackStream = false
     private var canUseFallbackStream = false
+    private var hasFinishedPlayback = false
     private var connectionGeneration = 0
     private var refreshGeneration: Int?
     private static let manualRefreshCooldown: TimeInterval = 10
     private static let connectionEnabledKey = "tonkunst.connectionEnabled"
 
-    override init() {
-        super.init()
-        Task { [weak self] in
-            // Let SwiftUI present its first frame before doing any work that can
-            // involve system services (notably Keychain and MediaPlayer).
-            await Task.yield()
-            guard let self else { return }
+    private var didStart = false
+    private var remoteControlsConfigured = false
 
-            configureRemoteControls()
-            let sessionResult = await Task.detached(priority: .userInitiated) {
-                try KeychainStore.load()
-            }.result
-            switch sessionResult {
-            case .success(let session):
-                savedProfiles = session.profiles
-                profile = session.active
-                connectionEnabled = UserDefaults.standard.object(forKey: Self.connectionEnabledKey) as? Bool ?? true
-            case .failure(let error):
-                errorMessage = error.localizedDescription
-            }
-            playlistLibrary.activate(profile)
-            isRestoringSession = false
-
-            if profile != nil && connectionEnabled {
-                await refresh()
-                startConnectionMonitoring()
-            }
+    func start() async {
+        guard !didStart else { return }
+        didStart = true
+        async let offlineRestoration: Void = offline.restore()
+        async let playlistRestoration: Void = playlistLibrary.restore()
+        let sessionResult = await Task.detached(priority: .userInitiated) {
+            try KeychainStore.load()
+        }.result
+        await offlineRestoration
+        await playlistRestoration
+        switch sessionResult {
+        case .success(let session):
+            savedProfiles = session.profiles
+            profile = session.active
+            connectionEnabled = UserDefaults.standard.object(forKey: Self.connectionEnabledKey) as? Bool ?? true
+        case .failure(let error):
+            errorMessage = error.localizedDescription
+        }
+        playlistLibrary.activate(profile)
+        tracks = playlistLibrary.catalog
+        isRestoringSession = false
+        if profile != nil && connectionEnabled {
+            await refresh()
+            startConnectionMonitoring()
         }
     }
 
@@ -260,31 +261,37 @@ final class MusicStore: NSObject, ObservableObject {
     func playPlaylist(_ tracks: [MediaTrack], startingAt index: Int = 0) {
         guard tracks.indices.contains(index) else { return }
         playbackQueue = tracks
-        playbackQueueIndex = index
+        playbackOrder.reset(count: tracks.count, startingAt: index, shuffled: isShuffled)
         stopPlayerOnly()
         currentTrack = nil
         play(tracks[index], preservingQueue: true)
     }
 
     func play(_ track: MediaTrack, preservingQueue: Bool = false) {
-        if !preservingQueue { playbackQueue = nil }
         let localSource = offline.localURL(for: track)
         guard let source = localSource ?? (connectionAvailable ? track.streamURL : nil) else { errorMessage = "This song is not downloaded and Jellyfin is unavailable."; return }
         if currentTrack?.id == track.id, player != nil { togglePlay(); return }
+        if !preservingQueue {
+            let queue = tracks.contains(where: { $0.id == track.id }) ? tracks : [track]
+            playbackQueue = queue
+            playbackOrder.reset(count: queue.count, startingAt: queue.firstIndex { $0.id == track.id } ?? 0, shuffled: isShuffled)
+        }
         stopPlayerOnly()
         currentTrack = track; progress = 0; playbackDuration = track.duration
         isUsingFallbackStream = false
         canUseFallbackStream = localSource == nil
+        configureRemoteControls()
         startPlayer(source: source, for: track)
     }
 
     func togglePlay() {
-        guard let player else { if let currentTrack { play(currentTrack) }; return }
+        guard let player else { if let currentTrack { play(currentTrack, preservingQueue: true) }; return }
         if isPlaying {
             player.pause()
             isPlaying = false
             updateNowPlaying()
         } else {
+            if hasFinishedPlayback { seek(to: 0) }
             activateAudioSession { [weak self] result in
                 guard let self else { return }
                 switch result {
@@ -300,38 +307,61 @@ final class MusicStore: NSObject, ObservableObject {
         }
     }
     func stop() { playbackQueue = nil; stopPlayerOnly(); currentTrack = nil; isPlaying = false; deactivateAudioSession() }
-    func seek(to seconds: Double) { player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600)); progress = seconds }
+    func seek(to seconds: Double) {
+        hasFinishedPlayback = false
+        player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600))
+        progress = seconds
+    }
     func skip(_ delta: TimeInterval) { seek(to: max(0, min(playbackDuration, progress + delta))) }
 
     func next() {
-        let queue = playbackQueue ?? tracks
-        guard !queue.isEmpty else { return }
-        guard let currentTrack else { play(queue[0], preservingQueue: true); return }
-        let index = playbackQueue == nil ? (queue.firstIndex { $0.id == currentTrack.id } ?? 0) : playbackQueueIndex
-        let nextIndex: Int?
-        if isShuffled { nextIndex = queue.indices.filter { $0 != index }.randomElement() ?? index }
-        else if index + 1 < queue.count { nextIndex = index + 1 }
-        else { nextIndex = repeatMode == .all ? 0 : nil }
-        if let nextIndex {
-            playbackQueueIndex = nextIndex
-            stopPlayerOnly(); self.currentTrack = nil
-            play(queue[nextIndex], preservingQueue: true)
-        }
+        advancePlayback(afterFinishing: false)
     }
-    func previous() {
-        let queue = playbackQueue ?? tracks
-        if progress > 4 { seek(to: 0) }
-        else if let currentTrack {
-            let index = playbackQueue == nil ? (queue.firstIndex { $0.id == currentTrack.id } ?? 0) : playbackQueueIndex
-            if index > 0 {
-                playbackQueueIndex = index - 1
-                stopPlayerOnly(); self.currentTrack = nil
-                play(queue[index - 1], preservingQueue: true)
+
+    private func advancePlayback(afterFinishing: Bool) {
+        guard let queue = playbackQueue,
+              let index = playbackOrder.advance(repeatMode: repeatMode, afterFinishing: afterFinishing) else {
+            if afterFinishing {
+                player?.pause()
+                hasFinishedPlayback = true
+                isPlaying = false
+                updateNowPlaying()
             }
+            return
+        }
+        if afterFinishing && repeatMode == .one {
+            seek(to: 0)
+            player?.play()
+            isPlaying = true
+            updateNowPlaying()
+        } else {
+            playQueueTrack(queue[index])
         }
     }
 
-    func cycleRepeat() { repeatMode = repeatMode == .off ? .all : (repeatMode == .all ? .one : .off) }
+    private func playQueueTrack(_ track: MediaTrack) {
+        // Restart even when adjacent playlist occurrences refer to the same song.
+        stopPlayerOnly()
+        currentTrack = nil
+        play(track, preservingQueue: true)
+    }
+
+    func previous() {
+        if progress > 4 { seek(to: 0); return }
+        guard let queue = playbackQueue else { return }
+        if let index = playbackOrder.previous(repeatMode: repeatMode) {
+            playQueueTrack(queue[index])
+        } else {
+            seek(to: 0)
+        }
+    }
+
+    func toggleShuffle() {
+        isShuffled.toggle()
+        playbackOrder.setShuffled(isShuffled)
+    }
+
+    func cycleRepeat() { repeatMode = repeatMode.next }
 
     func toggleDownload(_ track: MediaTrack) async {
         if offline.contains(track) {
@@ -349,6 +379,7 @@ final class MusicStore: NSObject, ObservableObject {
     }
 
     private func startPlayer(source: URL, for track: MediaTrack) {
+        hasFinishedPlayback = false
         let player = AVPlayer(url: source)
         self.player = player
         observePlayer(player, trackID: track.id)
@@ -385,7 +416,7 @@ final class MusicStore: NSObject, ObservableObject {
         didFinishObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.player === player else { return }
-                if self.repeatMode == .one { self.seek(to: 0); self.player?.play() } else { self.next() }
+                self.advancePlayback(afterFinishing: true)
             }
         }
         didFailToFinishObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemFailedToPlayToEndTime, object: player.currentItem, queue: .main) { [weak self] notification in
@@ -481,6 +512,8 @@ final class MusicStore: NSObject, ObservableObject {
         }
     }
     private func configureRemoteControls() {
+        guard !remoteControlsConfigured else { return }
+        remoteControlsConfigured = true
         let controls = MPRemoteCommandCenter.shared(); controls.playCommand.addTarget { [weak self] _ in Task { @MainActor in self?.togglePlay() }; return .success }; controls.pauseCommand.addTarget { [weak self] _ in Task { @MainActor in self?.togglePlay() }; return .success }; controls.nextTrackCommand.addTarget { [weak self] _ in Task { @MainActor in self?.next() }; return .success }; controls.previousTrackCommand.addTarget { [weak self] _ in Task { @MainActor in self?.previous() }; return .success }
     }
     private func updateNowPlaying() { guard let currentTrack else { MPNowPlayingInfoCenter.default().nowPlayingInfo = nil; return }; MPNowPlayingInfoCenter.default().nowPlayingInfo = [MPMediaItemPropertyTitle: currentTrack.title, MPMediaItemPropertyArtist: currentTrack.artist, MPMediaItemPropertyAlbumTitle: currentTrack.album, MPMediaItemPropertyPlaybackDuration: playbackDuration, MPNowPlayingInfoPropertyElapsedPlaybackTime: progress, MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1 : 0] }

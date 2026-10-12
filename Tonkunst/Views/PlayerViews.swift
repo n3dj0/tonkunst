@@ -56,9 +56,16 @@ struct NowPlayingView: View {
                             }.font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                         }
                         .padding(.horizontal, 26)
-                        HStack(spacing: 16) {
-                            Button { store.isShuffled.toggle() } label: { Image(systemName: "shuffle").foregroundStyle(store.isShuffled ? Color.accentColor : .primary) }
+                        HStack(spacing: 8) {
+                            Button { store.toggleShuffle() } label: {
+                                Image(systemName: "shuffle")
+                                    .foregroundStyle(.primary)
+                                    .frame(width: 44, height: 44)
+                                    .background(store.isShuffled ? Color.primary.opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 12))
+                            }
                                 .accessibilityLabel("Shuffle")
+                                .accessibilityValue(store.isShuffled ? "On" : "Off")
+                                .accessibilityAddTraits(store.isShuffled ? .isSelected : [])
                             Button { store.skip(-15) } label: { Image(systemName: "gobackward.15") }
                                 .accessibilityLabel("Back 15 seconds")
                             Button { store.previous() } label: { Image(systemName: "backward.fill").font(.title2) }
@@ -69,8 +76,15 @@ struct NowPlayingView: View {
                                 .accessibilityLabel("Next track")
                             Button { store.skip(15) } label: { Image(systemName: "goforward.15") }
                                 .accessibilityLabel("Forward 15 seconds")
-                            Button { store.cycleRepeat() } label: { Image(systemName: store.repeatMode == .one ? "repeat.1" : "repeat").foregroundStyle(store.repeatMode == .off ? .primary : Color.accentColor) }
+                            Button { store.cycleRepeat() } label: {
+                                Image(systemName: store.repeatMode == .one ? "repeat.1" : "repeat")
+                                    .foregroundStyle(.primary)
+                                    .frame(width: 44, height: 44)
+                                    .background(store.repeatMode != .off ? Color.primary.opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 12))
+                            }
                                 .accessibilityLabel("Repeat")
+                                .accessibilityValue(store.repeatMode.accessibilityValue)
+                                .accessibilityAddTraits(store.repeatMode != .off ? .isSelected : [])
                         }
                         .font(.title3)
                         .buttonStyle(.plain)

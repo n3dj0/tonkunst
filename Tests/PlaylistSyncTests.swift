@@ -50,6 +50,13 @@ struct JellyfinAPI: PlaylistRemoteServing {
         let restored = PlaylistLibrary(fileURL: file, api: api)
         restored.activate(profile)
         assert(restored.playlists[0].id == id && restored.playlists[0].dirty)
+        let deferred = PlaylistLibrary(fileURL: file, api: api, deferRestore: true)
+        deferred.activate(profile)
+        assert(deferred.playlists.isEmpty, "Deferred construction must not read the archive")
+        await deferred.restore()
+        deferred.activate(profile)
+        assert(deferred.playlists[0].id == id && deferred.playlists[0].dirty,
+               "Background restoration must preserve pending offline edits")
         await library.sync(profile: profile) { true }
         assert(api.saves == 1 && !library.playlists[0].dirty)
         await library.sync(profile: profile) { true }

@@ -4,8 +4,6 @@ import Foundation
 @MainActor
 final class OfflineLibrary: ObservableObject {
     @Published private(set) var downloaded: [String: URL] = [:]
-    private let manifestKey = "offlineTrackManifest"
-    private let trackManifestKey = "offlineTrackMetadata"
     private let documentsRoot: URL?
     private let defaults: UserDefaults
     private(set) var savedTracks: [String: MediaTrack] = [:]
@@ -13,8 +11,6 @@ final class OfflineLibrary: ObservableObject {
     init(documentsRoot: URL? = nil, defaults: UserDefaults = .standard) {
         self.documentsRoot = documentsRoot
         self.defaults = defaults
-        _ = try? documentsDirectory()
-        loadManifest()
     }
 
     func localURL(for track: MediaTrack) -> URL? {
@@ -116,14 +112,70 @@ final class OfflineLibrary: ObservableObject {
         saveManifest()
     }
 
+    private var disk: OfflineLibraryDisk {
+        OfflineLibraryDisk(documentsRoot: documentsRoot, defaults: defaults,
+                           downloaded: downloaded, savedTracks: savedTracks)
+    }
+
+    func restore() async {
+        let worker = disk
+        let restored = await Task.detached(priority: .userInitiated) {
+            var worker = worker
+            worker.loadManifest()
+            return (worker.downloaded, worker.savedTracks)
+        }.value
+        savedTracks = restored.1
+        downloaded = restored.0
+    }
+
+    private func destination(for track: MediaTrack, fileExtension: String) throws -> URL {
+        try disk.destination(for: track, fileExtension: fileExtension)
+    }
+    private func removeEmptyFolders(startingAt folder: URL) { disk.removeEmptyFolders(startingAt: folder) }
+    private func detectedAudioExtension(at url: URL) -> String? { disk.detectedAudioExtension(at: url) }
+    private func isHLSPlaylist(at url: URL) -> Bool { disk.isHLSPlaylist(at: url) }
+    private func relocate(_ url: URL, track: MediaTrack?, id: String) -> URL { disk.relocate(url, track: track, id: id) }
+    private func saveManifest() { disk.saveManifest() }
+
+    func reconcile(with tracks: [MediaTrack]) {
+        var changed = false
+        for track in tracks where downloaded[track.id] != nil {
+            guard let previous = downloaded[track.id] else { continue }
+            let current = relocate(previous, track: track, id: track.id)
+            if current != previous { downloaded[track.id] = current; changed = true }
+            var savedTrack = track
+            savedTrack.fileExtension = current.pathExtension
+            if savedTracks[track.id] != savedTrack { savedTracks[track.id] = savedTrack; changed = true }
+        }
+        if changed { saveManifest() }
+    }
+}
+
+private enum OfflineAudioError: LocalizedError {
+    case unsupportedFormat
+
+    var errorDescription: String? {
+        "Jellyfin returned audio that this device cannot play offline."
+    }
+}
+
+// This worker owns only a snapshot; the observable library stays on the main actor.
+private struct OfflineLibraryDisk {
+    let documentsRoot: URL?
+    let defaults: UserDefaults
+    var downloaded: [String: URL]
+    var savedTracks: [String: MediaTrack]
+    private let manifestKey = "offlineTrackManifest"
+    private let trackManifestKey = "offlineTrackMetadata"
+
     /// The Documents root is shown as "On My iPhone → Tonkunst" in Files.
-    private func documentsDirectory() throws -> URL {
+    func documentsDirectory() throws -> URL {
         let root = try documentsRoot ?? FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return root
     }
 
-    private func destination(for track: MediaTrack?, id: String? = nil, fileExtension: String) throws -> URL {
+    func destination(for track: MediaTrack?, id: String? = nil, fileExtension: String) throws -> URL {
         let artist = safeName(track?.artist ?? "Unknown Artist", fallback: "Unknown Artist", maxBytes: 100)
         let album = safeName(track?.album ?? "Unknown Album", fallback: "Unknown Album", maxBytes: 100)
         let title = safeName(track?.title ?? "Unknown Song", fallback: "Unknown Song", maxBytes: 100)
@@ -136,7 +188,7 @@ final class OfflineLibrary: ObservableObject {
         return folder.appendingPathComponent("\(title) [\(trackID)].\(ext.isEmpty ? "m4a" : ext)")
     }
 
-    private func safeName(_ name: String, fallback: String, maxBytes: Int) -> String {
+    func safeName(_ name: String, fallback: String, maxBytes: Int) -> String {
         let invalid = CharacterSet(charactersIn: "/\\:").union(.controlCharacters)
         let cleaned = name.unicodeScalars.map { invalid.contains($0) ? "_" : String($0) }.joined()
             .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
@@ -148,7 +200,7 @@ final class OfflineLibrary: ObservableObject {
         return result.isEmpty ? fallback : result
     }
 
-    private func removeEmptyFolders(startingAt folder: URL) {
+    func removeEmptyFolders(startingAt folder: URL) {
         guard let root = try? documentsDirectory() else { return }
         var current = folder
         while current != root, current.path.hasPrefix(root.path + "/") {
@@ -160,7 +212,7 @@ final class OfflineLibrary: ObservableObject {
 
     /// Existing downloads were stored in private Application Support. Move
     /// them into Files without losing a playable copy if a move fails.
-    private func relocate(_ url: URL, track: MediaTrack?, id: String) -> URL {
+    func relocate(_ url: URL, track: MediaTrack?, id: String) -> URL {
         guard let destination = try? destination(for: track, id: id, fileExtension: url.pathExtension),
               url != destination else { return url }
         guard !FileManager.default.fileExists(atPath: destination.path) else { return url }
@@ -173,7 +225,7 @@ final class OfflineLibrary: ObservableObject {
         }
     }
 
-    private func repairedExtension(at url: URL) -> URL {
+    func repairedExtension(at url: URL) -> URL {
         guard let detected = detectedAudioExtension(at: url), detected != url.pathExtension.lowercased() else { return url }
         let destination = url.deletingPathExtension().appendingPathExtension(detected)
         guard !FileManager.default.fileExists(atPath: destination.path) else { return url }
@@ -185,7 +237,7 @@ final class OfflineLibrary: ObservableObject {
         }
     }
 
-    private func detectedAudioExtension(at url: URL) -> String? {
+    func detectedAudioExtension(at url: URL) -> String? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         guard let data = try? handle.read(upToCount: 16) else { return nil }
@@ -201,20 +253,7 @@ final class OfflineLibrary: ObservableObject {
         return nil
     }
 
-    func reconcile(with tracks: [MediaTrack]) {
-        var changed = false
-        for track in tracks where downloaded[track.id] != nil {
-            guard let previous = downloaded[track.id] else { continue }
-            let current = relocate(previous, track: track, id: track.id)
-            if current != previous { downloaded[track.id] = current; changed = true }
-            var savedTrack = track
-            savedTrack.fileExtension = current.pathExtension
-            if savedTracks[track.id] != savedTrack { savedTracks[track.id] = savedTrack; changed = true }
-        }
-        if changed { saveManifest() }
-    }
-
-    private func resolvedURL(for storedPath: String) -> URL? {
+    func resolvedURL(for storedPath: String) -> URL? {
         if storedPath.hasPrefix("Documents/"), let root = try? documentsDirectory() {
             let relative = String(storedPath.dropFirst("Documents/".count))
             let url = root.appendingPathComponent(relative)
@@ -233,7 +272,7 @@ final class OfflineLibrary: ObservableObject {
         return FileManager.default.fileExists(atPath: currentURL.path) ? currentURL : nil
     }
 
-    private func loadManifest() {
+    mutating func loadManifest() {
         guard let raw = defaults.dictionary(forKey: manifestKey) as? [String: String] else { return }
         let metadata = defaults.data(forKey: trackManifestKey)
             .flatMap { try? JSONDecoder().decode([String: MediaTrack].self, from: $0) } ?? [:]
@@ -255,7 +294,7 @@ final class OfflineLibrary: ObservableObject {
         }
         saveManifest()
     }
-    private func saveManifest() {
+    func saveManifest() {
         let rootPath = (try? documentsDirectory().path) ?? ""
         defaults.set(downloaded.mapValues { url in
             let prefix = rootPath + "/"
@@ -266,19 +305,11 @@ final class OfflineLibrary: ObservableObject {
         }
     }
 
-    private func isHLSPlaylist(at url: URL) -> Bool {
+    func isHLSPlaylist(at url: URL) -> Bool {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? handle.close() }
         guard let data = try? handle.read(upToCount: 32),
               let header = String(data: data, encoding: .utf8) else { return false }
         return header.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("#EXTM3U")
-    }
-}
-
-private enum OfflineAudioError: LocalizedError {
-    case unsupportedFormat
-
-    var errorDescription: String? {
-        "Jellyfin returned audio that this device cannot play offline."
     }
 }

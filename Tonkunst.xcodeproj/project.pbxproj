@@ -20,6 +20,7 @@
 		B00000000000000000000011 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000012 /* Assets.xcassets */; };
 		B00000000000000000000012 /* PlaylistLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000014 /* PlaylistLibrary.swift */; };
 		B00000000000000000000013 /* tonkunst.icon in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000015 /* tonkunst.icon */; };
+		B00000000000000000000014 /* PlaybackOrder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000016 /* PlaybackOrder.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -38,6 +39,7 @@
 		A00000000000000000000013 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A00000000000000000000014 /* PlaylistLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistLibrary.swift; sourceTree = "<group>"; };
 		A00000000000000000000015 /* tonkunst.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = tonkunst.icon; sourceTree = "<group>"; };
+		A00000000000000000000016 /* PlaybackOrder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackOrder.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -97,6 +99,7 @@
 			isa = PBXGroup;
 			children = (
 				A00000000000000000000007 /* MusicStore.swift */,
+				A00000000000000000000016 /* PlaybackOrder.swift */,
 			);
 			path = Store;
 			sourceTree = "<group>";
@@ -212,6 +215,7 @@
 				B00000000000000000000005 /* OfflineLibrary.swift in Sources */,
 				B00000000000000000000012 /* PlaylistLibrary.swift in Sources */,
 				B00000000000000000000006 /* MusicStore.swift in Sources */,
+				B00000000000000000000014 /* PlaybackOrder.swift in Sources */,
 				B00000000000000000000007 /* Components.swift in Sources */,
 				B00000000000000000000008 /* PlayerViews.swift in Sources */,
 				B00000000000000000000009 /* LibraryViews.swift in Sources */,

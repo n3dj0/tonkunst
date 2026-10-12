@@ -24,6 +24,8 @@ struct TonkunstApp: App {
         WindowGroup {
             LibraryView()
                 .environmentObject(store)
+                .task { await store.start() }
+                .disabled(store.isRestoringSession)
                 .tint(.white)
                 .accentColor(.white)
         }

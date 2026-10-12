@@ -19,6 +19,8 @@ Tonkunst is a native SwiftUI iPhone/iPad music client for a Jellyfin collection.
 2. Choose an iOS 17+ simulator or a signed physical iPhone/iPad and run.
 3. Open the account avatar and enter the LAN host of your Jellyfin server, for example `192.168.1.25`, select HTTP and port `8096`, then enter your Jellyfin account credentials.
 
+At launch, Tonkunst shows its opening interface while the saved account, playlist cache, and offline files restore in the background. Cached songs appear before the server refresh completes. Lock-screen media controls initialize when playback first starts. To check cold-start behavior, terminate the app and launch it from the Home Screen without the debugger, both with and without network access and with a populated offline library.
+
 After a successful sign-in, Tonkunst keeps the server address and Jellyfin access token in the Keychain. Sign Out ends the active session while leaving that saved account available to reconnect without entering the server or password again. The account screen also lets you add another account or swipe a saved account to forget it.
 
 The app permits local HTTP because many home Jellyfin servers do not have TLS configured. For distribution, prefer HTTPS whenever your Jellyfin setup supports it.
@@ -40,6 +42,12 @@ If both the device and server changed a playlist since the last sync, open it to
 Playlist updates use Jellyfin's `POST /Playlists/{id}` endpoint with the name and ordered song IDs, leaving sharing settings unchanged. Servers must support that update endpoint. Conflict checks compare the last synced version with the fetched server version; Jellyfin does not provide an atomic compare-and-swap here, so simultaneous edits during a sync can still race.
 
 Run the offline sync regression tests with `Tests/run-playlist-tests.sh` on macOS. These exercise the real persistence and sync coordinator with a mock server; live Jellyfin integration needs a connected server.
+
+## Playback controls
+
+Shuffle highlights when enabled and plays each queue occurrence once in a shuffled order. Previous retraces that order (or restarts the current song after four seconds). Turning Shuffle off restores the original queue order around the current song. Repeat cycles through Off → All songs → One song → Off; enabled modes highlight, and One displays a `1`. Repeat Off stops at the end of the queue, All loops the queue, and One replays the current song when it finishes. Next still skips songs with Repeat One enabled.
+
+Run playback regression tests with `Tests/run-playback-tests.sh` on macOS. These cover queue traversal, shuffle history, repeat modes, and empty/single-song queues without a server or audio device.
 
 ## Ambient backgrounds
 
