@@ -12,7 +12,7 @@ struct LibraryView: View {
         TabView(selection: $selectedTab) {
             SongsView(showAccount: $showAccount).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Songs", systemImage: "music.note.list") }.tag(0)
             ArtistsView(showAccount: $showAccount).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Artists", systemImage: "person.2") }.tag(1)
-            PlaylistsView(showAccount: $showAccount).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Playlists", systemImage: "music.note.list") }.tag(2)
+            QueueView(showAccount: $showAccount).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Queue", systemImage: "music.note.list") }.tag(2)
             OfflineView(showAccount: $showAccount).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Offline", systemImage: "iphone.gen3") }.tag(3)
             SearchView(showAccount: $showAccount).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(4)
         }
@@ -337,98 +337,58 @@ private struct ArtistTracksView: View {
     }
 }
 
-struct PlaylistsView: View {
+struct QueueView: View {
     @EnvironmentObject private var store: MusicStore
+    @Environment(\.miniPlayerClearance) private var playerClearance
     @Binding var showAccount: Bool
-    var body: some View {
-        PlaylistBrowser(library: store.playlistLibrary, showAccount: $showAccount)
-    }
-}
-
-private struct PlaylistBrowser: View {
-    @EnvironmentObject private var store: MusicStore
-    @ObservedObject var library: PlaylistLibrary
-    @Binding var showAccount: Bool
-    @State private var showCreate = false
-    @State private var name = ""
-    @State private var deleting: SavedPlaylist?
     @State private var isBrandVisible = true
-    @State private var isRefreshing = false
-    @State private var showsInitialProgress = false
 
-    private var needsInitialProgress: Bool {
-        library.playlists.isEmpty && library.isSyncing && !isRefreshing
+    private var isEmpty: Bool {
+        store.queue.current == nil && store.queue.history.isEmpty && store.queue.upcoming.isEmpty
     }
 
     var body: some View {
         NavigationStack {
-            List {
-                Group {
-                    if let message = library.message {
-                        Section {
-                            Text(message).foregroundStyle(.red)
-                            Button("Retry Sync") { Task { await store.syncPlaylists(isUserInitiated: true) } }
-                        }
-                    }
-                    ForEach(library.playlists) { playlist in
-                        NavigationLink {
-                            PlaylistDetail(library: library, id: playlist.id)
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "music.note.list")
-                                    .font(.title3.weight(.semibold))
-                                    .foregroundStyle(.white)
-                                    .frame(width: 48, height: 48)
-                                    .background(Color.accentColor.gradient, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(playlist.content.name)
-                                        .font(.body.weight(.medium))
-                                        .lineLimit(1)
-                                    Text(status(playlist))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
+            Group {
+                if isEmpty {
+                    ContentUnavailableView("Your Queue", systemImage: "music.note.list",
+                        description: Text("Long-press a song in any list and choose Add to Queue."))
+                } else {
+                    GeometryReader { geometry in
+                        ScrollViewReader { proxy in
+                            List {
+                                ForEach(Array(store.queue.upcoming.reversed())) { entry in
+                                    queueRow(entry, state: "Upcoming")
                                 }
-                                Spacer()
+                                if let entry = store.queue.current {
+                                    queueRow(entry, state: "Now Playing")
+                                        .id("current")
+                                } else if !store.queue.upcoming.isEmpty {
+                                    Button("Start Queue", systemImage: "play.fill") { store.next() }
+                                        .id("current")
+                                }
+                                ForEach(store.queue.history) { entry in
+                                    queueRow(entry, state: "Played")
+                                }
                             }
-                        }
-                        .swipeActions {
-                            if !playlist.deleted && !playlist.conflict && !playlist.creationUncertain {
-                                Button("Delete", role: .destructive) { deleting = playlist }
-                                    .disabled(library.isSyncing)
+                            .listStyle(.plain)
+                            .contentMargins(.top, max(0, geometry.size.height / 2 - 40), for: .scrollContent)
+                            .contentMargins(.bottom, max(playerClearance, geometry.size.height / 2 - 40), for: .scrollContent)
+                            .tonkunstBrandVisibility($isBrandVisible)
+                            .onAppear { proxy.scrollTo("current", anchor: .center) }
+                            .onChange(of: store.queue.current?.id) { _, _ in
+                                withAnimation { proxy.scrollTo("current", anchor: .center) }
                             }
                         }
                     }
                 }
-                .ambientRows()
             }
-            .listStyle(.plain)
-            .miniPlayerScrollClearance()
-            .tonkunstBrandVisibility($isBrandVisible)
-            .overlay {
-                if needsInitialProgress && showsInitialProgress {
-                    ProgressView("Loading playlists…")
-                } else if library.playlists.isEmpty && !library.isSyncing && library.message == nil {
-                    ContentUnavailableView("Your Playlists", systemImage: "music.note.list",
-                        description: Text(store.profile == nil ? "Connect to Jellyfin to create and sync playlists." : "Tap + to create a playlist. Changes made offline sync when you reconnect."))
-                }
-            }
-            .refreshable {
-                isRefreshing = true
-                defer { isRefreshing = false }
-                await store.syncPlaylists(isUserInitiated: true)
-            }
-            .task(id: needsInitialProgress) {
-                showsInitialProgress = false
-                guard needsInitialProgress else { return }
-                // Avoid flashing a spinner for fast requests; keep cached lists stable.
-                do { try await Task.sleep(for: .milliseconds(500)) }
-                catch { return }
-                showsInitialProgress = true
+            .onChange(of: isEmpty) { _, empty in
+                if empty { isBrandVisible = true }
             }
             .libraryHeaderSpacing()
             .ambientScreen()
-            .navigationTitle(isBrandVisible ? "" : "Playlists")
+            .navigationTitle(isBrandVisible ? "" : "Queue")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -436,218 +396,35 @@ private struct PlaylistBrowser: View {
                 }
                 .sharedBackgroundVisibility(.hidden)
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button { name = ""; showCreate = true } label: { Image(systemName: "plus") }
-                        .tint(.primary)
-                        .accessibilityLabel("New playlist")
-                        .disabled(store.profile == nil || library.isSyncing)
                     ConnectionPill()
                     AccountButton(showAccount: $showAccount)
                 }
             }
-            .alert("New Playlist", isPresented: $showCreate) {
-                TextField("Playlist name", text: $name)
-                Button("Cancel", role: .cancel) {}
-                Button("Create") { library.create(name: name); sync() }
-                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || library.isSyncing)
-            }
-            .confirmationDialog("Delete playlist from this device and Jellyfin?", isPresented: Binding(
-                get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
-                Button("Delete Playlist", role: .destructive) {
-                    if let deleting { library.delete(deleting.id); sync() }
-                    deleting = nil
-                }
-            } message: { Text("Songs stay in your music library. Offline deletions sync when you reconnect.") }
         }
     }
 
-    private func sync() { Task { await store.syncPlaylists() } }
-    private func status(_ playlist: SavedPlaylist) -> String {
-        if playlist.creationUncertain { return "Creation needs review" }
-        if playlist.conflict { return "Changes need review" }
-        if playlist.deleted { return "Waiting to delete from Jellyfin" }
-        return "\(playlist.content.tracks.count) songs" + (playlist.dirty ? " · Waiting to sync" : " · Synced")
-    }
-}
-
-private struct PlaylistDetail: View {
-    @EnvironmentObject private var store: MusicStore
-    @ObservedObject var library: PlaylistLibrary
-    let id: UUID
-    @State private var showSongs = false
-    @State private var showRename = false
-    @State private var showRetry = false
-    @State private var name = ""
-    @State private var editMode: EditMode = .inactive
-    private var playlist: SavedPlaylist? { library.playlists.first { $0.id == id } }
-
-    var body: some View {
-        Group {
-            if let playlist {
-                List {
-                    Group {
-                        if playlist.creationUncertain {
-                            Section("Creation needs review") {
-                                Text("Jellyfin may have created this playlist, but the response was lost. Refresh and check the server playlists before trying again to avoid a duplicate.")
-                                Button("Refresh from Jellyfin") { sync() }
-                                Button("Try Creating Again") { showRetry = true }
-                                Button("Discard Device Draft", role: .destructive) { library.resolve(id, keepCopy: false) }
-                            }
-                        }
-                        if playlist.conflict {
-                            Section("Changes on both devices") {
-                                Text(playlist.remote == nil ? "This playlist was removed from Jellyfin. Your device changes are still here." : "Jellyfin and this device have different changes. Keep the server version, or also save your device version as a new private playlist.")
-                                Button("Keep Both Versions") { library.resolve(id, keepCopy: true); sync() }
-                                Button("Use Server Version", role: .destructive) { library.resolve(id, keepCopy: false) }
-                            }
-                        }
-                        if let message = library.message { Text(message).foregroundStyle(.red) }
-                        if playlist.deleted {
-                            Text("Waiting to delete from Jellyfin.")
-                            Button("Cancel Deletion") { library.cancelDeletion(id) }
-                        } else {
-                            Section {
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 8) {
-                                        Button { store.playPlaylist(playable(playlist.content.tracks).filter(store.canPlay)) } label: {
-                                            HStack(spacing: 5) {
-                                                Image(systemName: "play.fill").font(.caption)
-                                                Text("Play")
-                                            }
-                                        }
-                                            .disabled(!playlist.content.tracks.contains(where: store.canPlay))
-                                        Button { showSongs = true } label: {
-                                            HStack(spacing: 5) {
-                                                Image(systemName: "plus").font(.caption)
-                                                Text("Add Songs")
-                                            }
-                                        }
-                                            .disabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
-                                        Button(editMode.isEditing ? "Done" : "Edit") {
-                                            withAnimation { editMode = editMode.isEditing ? .inactive : .active }
-                                        }
-                                        .disabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
-                                        Button("Rename") { name = playlist.content.name; showRename = true }
-                                            .disabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
-                                    }
-                                    .buttonStyle(.glass)
-                                    .tint(.primary)
-                                    .font(.subheadline)
-                                    .padding(.vertical, 4)
-                                }
-                                .defaultScrollAnchor(.center, for: .alignment)
-                                .listRowSeparator(.hidden)
-                            }
-                            if !store.connectionAvailable {
-                                Text("Only downloaded songs can play offline.")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Section {
-                                ForEach(Array(playlist.content.tracks.enumerated()), id: \.offset) { index, track in
-                                    SongRow(track: track) {
-                                        store.playPlaylist(playable(playlist.content.tracks), startingAt: index)
-                                    }
-                                }
-                                .onDelete { offsets in
-                                    var content = playlist.content
-                                    content.tracks.remove(atOffsets: offsets)
-                                    library.edit(id, content: content); sync()
-                                }
-                                .onMove { offsets, destination in
-                                    var content = playlist.content
-                                    content.tracks.move(fromOffsets: offsets, toOffset: destination)
-                                    library.edit(id, content: content); sync()
-                                }
-                                .deleteDisabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
-                                .moveDisabled(library.isSyncing || playlist.conflict || playlist.creationUncertain)
-                            }
-                        }
-                    }
-                    .ambientRows()
-                }
-                .listStyle(.plain)
-                .miniPlayerScrollClearance()
-                .environment(\.editMode, $editMode)
-                .ambientScreen()
-                .navigationTitle(playlist.content.name)
-                .navigationBarTitleDisplayMode(.inline)
-                .refreshable { await store.syncPlaylists(isUserInitiated: true) }
-            } else {
-                ContentUnavailableView("Playlist Removed", systemImage: "music.note.list")
+    private func queueRow(_ entry: QueueEntry, state: String) -> some View {
+        HStack(spacing: 12) {
+            Artwork(track: entry.track, size: 48)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.track.title).fontWeight(state == "Now Playing" ? .bold : .regular)
+                Text("\(entry.track.artist) · \(state)").font(.caption).foregroundStyle(.secondary)
             }
+            Spacer()
+            if store.offline.contains(entry.track) { OfflineBadge() }
+            Text(entry.track.formattedDuration).font(.caption.monospacedDigit())
         }
-        .sheet(isPresented: $showSongs) {
-            PlaylistSongPicker(library: library) { selected in
-                guard var content = self.playlist?.content else { return }
-                content.tracks += selected
-                library.edit(id, content: content); sync()
-            }
-        }
-        .alert("Rename Playlist", isPresented: $showRename) {
-            TextField("Playlist name", text: $name)
-            Button("Cancel", role: .cancel) {}
-            Button("Save") {
-                guard var content = playlist?.content else { return }
-                content.name = name
-                library.edit(id, content: content); sync()
-            }.disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || library.isSyncing)
-        }
-        .alert("Create another playlist?", isPresented: $showRetry) {
-            Button("Cancel", role: .cancel) {}
-            Button("Create") { library.retryCreation(id); sync() }
-        } message: { Text("If the earlier request succeeded, this will create a duplicate on Jellyfin.") }
-    }
-    private func sync() { Task { await store.syncPlaylists() } }
-    private func playable(_ tracks: [MediaTrack]) -> [MediaTrack] {
-        tracks.map { track in store.tracks.first { $0.id == track.id } ?? track }
-    }
-}
-
-private struct PlaylistSongPicker: View {
-    @EnvironmentObject private var store: MusicStore
-    @ObservedObject var library: PlaylistLibrary
-    @Environment(\.dismiss) private var dismiss
-    @State private var query = ""
-    @State private var selected: [MediaTrack] = []
-    let add: ([MediaTrack]) -> Void
-    private var songs: [MediaTrack] {
-        let tracks = store.tracks + store.playlistLibrary.catalog + store.playlistLibrary.playlists.flatMap { $0.content.tracks }
-        var seen = Set<String>()
-        return tracks.filter { store.canPlay($0) && seen.insert($0.id).inserted && (query.isEmpty || $0.matches(query)) }
-    }
-    var body: some View {
-        NavigationStack {
-            List(songs) { track in
-                Group {
-                    Button {
-                        if selected.contains(where: { $0.id == track.id }) { selected.removeAll { $0.id == track.id } }
-                        else { selected.append(track) }
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(track.title).foregroundStyle(.primary)
-                                Text(track.artist).font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            if selected.contains(where: { $0.id == track.id }) { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-                .ambientRows()
-            }
-            .overlay { if songs.isEmpty { ContentUnavailableView("No Songs", systemImage: "music.note", description: Text("Connect to Jellyfin to load your music library.")) } }
-            .searchable(text: $query, prompt: "Songs, artists, albums")
-            .ambientScreen()
-            .navigationTitle("Add Songs")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Add (\(selected.count))") { add(selected); dismiss() }
-                        .disabled(selected.isEmpty || library.isSyncing)
-                }
-            }
+        .foregroundStyle(state == "Played" ? .secondary : .primary)
+        .listRowBackground(state == "Played" ? Color.gray.opacity(0.15) : Color.clear)
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button("Add to Queue", systemImage: "text.badge.plus") { store.addToQueue(entry.track) }
+            Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") { store.queuePlayNext(entry.id) }
+            Button("Move Up", systemImage: "arrow.up") { store.moveInQueue(entry.id, up: true) }
+                .disabled(!store.queue.canMove(entry.id, up: true))
+            Button("Move Down", systemImage: "arrow.down") { store.moveInQueue(entry.id, up: false) }
+                .disabled(!store.queue.canMove(entry.id, up: false))
+            Button("Delete from Queue", systemImage: "trash", role: .destructive) { store.removeFromQueue(entry.id) }
         }
     }
 }

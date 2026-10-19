@@ -14,7 +14,7 @@ enum JellyfinError: LocalizedError {
     }
 }
 
-struct JellyfinAPI: PlaylistRemoteServing {
+struct JellyfinAPI {
     private let clientName = "Tonkunst"
     private let deviceID = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
     private let requestTimeout: TimeInterval = 15
@@ -57,7 +57,7 @@ struct JellyfinAPI: PlaylistRemoteServing {
     }
 
     func fetchSongs(profile: ServerProfile) async throws -> [MediaTrack] {
-        let items = try await playlistItems(profile: profile, path: "Users/\(profile.userID)/Items", query: [
+        let items = try await fetchItems(profile: profile, path: "Users/\(profile.userID)/Items", query: [
             URLQueryItem(name: "IncludeItemTypes", value: "Audio"), URLQueryItem(name: "Recursive", value: "true"),
             URLQueryItem(name: "SortBy", value: "SortName"), URLQueryItem(name: "Fields", value: "UserData"),
             URLQueryItem(name: "EnableImages", value: "false")
@@ -106,7 +106,7 @@ struct JellyfinAPI: PlaylistRemoteServing {
         )
     }
 
-    func playlistRequest(profile: ServerProfile, path: String, method: String = "GET",
+    func requestData(profile: ServerProfile, path: String, method: String = "GET",
                          query: [URLQueryItem] = [], body: Data? = nil) async throws -> Data {
         guard let base = profile.normalizedBaseURL else { throw JellyfinError.invalidServer }
         var parts = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
@@ -118,14 +118,14 @@ struct JellyfinAPI: PlaylistRemoteServing {
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         let (data, response) = try await data(for: request)
         guard let http = response as? HTTPURLResponse else { throw JellyfinError.badResponse }
-        guard (200..<300).contains(http.statusCode) else { throw PlaylistHTTPError(status: http.statusCode) }
+        guard (200..<300).contains(http.statusCode) else { throw JellyfinError.badResponse }
         return data
     }
 
-    func playlistItems(profile: ServerProfile, path: String, query: [URLQueryItem] = []) async throws -> [JellyfinItem] {
+    func fetchItems(profile: ServerProfile, path: String, query: [URLQueryItem] = []) async throws -> [JellyfinItem] {
         var items: [JellyfinItem] = []
         while true {
-            let data = try await playlistRequest(profile: profile, path: path, query: query + [
+            let data = try await requestData(profile: profile, path: path, query: query + [
                 URLQueryItem(name: "UserId", value: profile.userID),
                 URLQueryItem(name: "StartIndex", value: String(items.count)),
                 URLQueryItem(name: "Limit", value: "200")
@@ -134,38 +134,6 @@ struct JellyfinAPI: PlaylistRemoteServing {
             items += page.Items
             if page.Items.isEmpty || items.count >= (page.TotalRecordCount ?? Int.max) || (page.TotalRecordCount == nil && page.Items.count < 200) { return items }
         }
-    }
-
-    func fetchPlaylists(profile: ServerProfile) async throws -> [RemotePlaylist] {
-        let items = try await playlistItems(profile: profile, path: "Users/\(profile.userID)/Items", query: [
-            URLQueryItem(name: "IncludeItemTypes", value: "Playlist"),
-            URLQueryItem(name: "Recursive", value: "true")
-        ])
-        var result: [RemotePlaylist] = []
-        for item in items {
-            let entries = try await playlistItems(profile: profile, path: "Playlists/\(item.Id)/Items")
-            result.append(RemotePlaylist(id: item.Id, content: PlaylistContent(name: item.Name,
-                tracks: entries.map { track(from: $0, profile: profile) })))
-        }
-        return result
-    }
-
-    func deletePlaylist(profile: ServerProfile, id: String) async throws {
-        _ = try await playlistRequest(profile: profile, path: "Items/\(id)", method: "DELETE")
-    }
-
-    func savePlaylist(profile: ServerProfile, id: String?, content: PlaylistContent) async throws -> String {
-        var body: [String: Any] = ["Name": content.name, "Ids": content.tracks.map(\.id)]
-        if id == nil {
-            body["UserId"] = profile.userID
-            body["MediaType"] = "Audio"
-            body["IsPublic"] = false
-        }
-        let data = try await playlistRequest(profile: profile, path: id.map { "Playlists/\($0)" } ?? "Playlists",
-                                             method: "POST", body: JSONSerialization.data(withJSONObject: body))
-        if let id { return id }
-        struct Created: Decodable { let Id: String }
-        return try JSONDecoder().decode(Created.self, from: data).Id
     }
 
     /// Checks the server itself, rather than only whether the device has a

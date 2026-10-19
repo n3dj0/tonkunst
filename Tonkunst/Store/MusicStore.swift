@@ -23,11 +23,31 @@ final class MusicStore: NSObject, ObservableObject {
     @Published var progress: Double = 0
     @Published var playbackDuration: Double = 0
     let offline = OfflineLibrary()
-    let playlistLibrary = PlaylistLibrary(deferRestore: true)
-    private var playbackQueue: [MediaTrack]?
-    private var playbackOrder = PlaybackOrder()
-    private var lastPlaylistSync = Date.distantPast
-    private var playlistRefreshAvailableDates: [String: Date] = [:]
+    @Published private(set) var queue = PlaybackQueue() {
+        didSet {
+            guard !isRestoringQueue, let queueAccount else { return }
+            do { try queueStorage.save(queue, account: queueAccount) }
+            catch { errorMessage = "The Queue could not be saved: \(error.localizedDescription)" }
+        }
+    }
+    private let queueStorage = QueueStorage()
+    private var queueAccount: String?
+    private var isRestoringQueue = false
+
+    private func restoreQueue() {
+        isRestoringQueue = true
+        defer { isRestoringQueue = false }
+        queueAccount = profile?.id ?? "local"
+        do { queue = try queueStorage.load(account: queueAccount!, token: profile?.accessToken) }
+        catch {
+            queue = PlaybackQueue()
+            errorMessage = "The saved Queue could not be read: \(error.localizedDescription)"
+        }
+        currentTrack = queue.current?.track
+        playbackDuration = currentTrack?.duration ?? 0
+        progress = 0
+        isPlaying = false
+    }
 
     typealias RepeatMode = PlaybackRepeatMode
     private let api = JellyfinAPI()
@@ -57,12 +77,10 @@ final class MusicStore: NSObject, ObservableObject {
         guard !didStart else { return }
         didStart = true
         async let offlineRestoration: Void = offline.restore()
-        async let playlistRestoration: Void = playlistLibrary.restore()
         let sessionResult = await Task.detached(priority: .userInitiated) {
             try KeychainStore.load()
         }.result
         await offlineRestoration
-        await playlistRestoration
         switch sessionResult {
         case .success(let session):
             savedProfiles = session.profiles
@@ -71,8 +89,7 @@ final class MusicStore: NSObject, ObservableObject {
         case .failure(let error):
             errorMessage = error.localizedDescription
         }
-        playlistLibrary.activate(profile)
-        cachedTracks = playlistLibrary.catalog
+        restoreQueue()
         isRestoringSession = false
         if profile != nil && connectionEnabled {
             await refresh()
@@ -113,9 +130,10 @@ final class MusicStore: NSObject, ObservableObject {
             connectionGeneration += 1
             connectionEnabled = true
             UserDefaults.standard.set(true, forKey: Self.connectionEnabledKey)
-            if profile?.id != authenticatedProfile.id { stop(); cachedTracks = [] }
+            stop()
+            if profile?.id != authenticatedProfile.id { cachedTracks = [] }
             profile = authenticatedProfile
-            playlistLibrary.activate(profile)
+            restoreQueue()
             await refresh()
             startConnectionMonitoring()
         }
@@ -157,7 +175,6 @@ final class MusicStore: NSObject, ObservableObject {
         do {
             let fetchedTracks = try await api.fetchSongs(profile: profile)
             guard self.profile == profile, connectionEnabled, connectionGeneration == generation else { return }
-            playlistLibrary.cacheTracks(fetchedTracks, profile: profile)
             offline.reconcile(with: fetchedTracks)
             cachedTracks = fetchedTracks.map { item in
                 var item = item
@@ -165,7 +182,6 @@ final class MusicStore: NSObject, ObservableObject {
                 return item
             }
             connectionAvailable = true
-            await syncPlaylists()
             guard self.profile == profile, connectionEnabled, connectionGeneration == generation else { return }
             libraryRefreshDates[profile.id] = Date()
             UserDefaults.standard.set(libraryRefreshDates, forKey: "tonkunst.libraryRefreshDates")
@@ -186,7 +202,7 @@ final class MusicStore: NSObject, ObservableObject {
         UserDefaults.standard.set(true, forKey: Self.connectionEnabledKey)
         KeychainStore.activate(savedProfile)
         profile = savedProfile
-        playlistLibrary.activate(profile)
+        restoreQueue()
         cachedTracks = []
         connectionAvailable = false
         errorMessage = nil
@@ -244,48 +260,15 @@ final class MusicStore: NSObject, ObservableObject {
         isConnecting = false
         UserDefaults.standard.set(true, forKey: Self.connectionEnabledKey)
         KeychainStore.signOut()
-        playlistLibrary.activate(nil)
         profile = nil; cachedTracks = []; connectionAvailable = false; errorMessage = nil
-    }
-
-    func syncPlaylists(isUserInitiated: Bool = false) async {
-        guard let profile, connectionEnabled, connectionAvailable,
-              !playlistLibrary.isSyncing else { return }
-        if isUserInitiated,
-           let availableAt = playlistRefreshAvailableDates[profile.id],
-           Date() < availableAt { return }
-        defer {
-            // Failures also consume the cooldown; edits and reconnection can still sync immediately.
-            playlistRefreshAvailableDates[profile.id] = Date().addingTimeInterval(Self.manualRefreshCooldown)
-        }
-        // All sync triggers share the polling clock, including connection and manual refreshes.
-        lastPlaylistSync = Date()
-        await playlistLibrary.sync(profile: profile) {
-            self.profile == profile && self.connectionEnabled && self.connectionAvailable
-        }
-    }
-
-    func playPlaylist(_ tracks: [MediaTrack], startingAt index: Int = 0) {
-        guard tracks.indices.contains(index) else { return }
-        guard canPlay(tracks[index]) else { return }
-        let playableTracks = tracks.filter(canPlay)
-        let playableIndex = tracks.prefix(index).filter(canPlay).count
-        playbackQueue = playableTracks
-        playbackOrder.reset(count: playableTracks.count, startingAt: playableIndex, shuffled: isShuffled)
-        stopPlayerOnly()
-        currentTrack = nil
-        play(tracks[index], preservingQueue: true)
+        restoreQueue()
     }
 
     func play(_ track: MediaTrack, preservingQueue: Bool = false) {
         let localSource = offline.localURL(for: track)
         guard let source = localSource ?? (connectionAvailable ? track.streamURL : nil) else { return }
         if currentTrack?.id == track.id, player != nil { togglePlay(); return }
-        if !preservingQueue {
-            let queue = tracks.contains(where: { $0.id == track.id }) ? tracks.filter(canPlay) : [track]
-            playbackQueue = queue
-            playbackOrder.reset(count: queue.count, startingAt: queue.firstIndex { $0.id == track.id } ?? 0, shuffled: isShuffled)
-        }
+        if !preservingQueue { queue.start(QueueEntry(track: track)) }
         stopPlayerOnly()
         currentTrack = track; progress = 0; playbackDuration = track.duration
         isUsingFallbackStream = false
@@ -316,7 +299,7 @@ final class MusicStore: NSObject, ObservableObject {
             }
         }
     }
-    func stop() { playbackQueue = nil; stopPlayerOnly(); currentTrack = nil; isPlaying = false; deactivateAudioSession() }
+    func stop() { stopPlayerOnly(); currentTrack = nil; isPlaying = false; updateNowPlaying(); deactivateAudioSession() }
     func seek(to seconds: Double) {
         hasFinishedPlayback = false
         player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600))
@@ -329,8 +312,7 @@ final class MusicStore: NSObject, ObservableObject {
     }
 
     private func advancePlayback(afterFinishing: Bool) {
-        guard let queue = playbackQueue,
-              let index = nextPlayableIndex(in: queue, afterFinishing: afterFinishing) else {
+        guard let entry = queue.advance(repeatMode: repeatMode, afterFinishing: afterFinishing, canPlay: canPlay) else {
             if afterFinishing {
                 player?.pause()
                 hasFinishedPlayback = true
@@ -339,26 +321,10 @@ final class MusicStore: NSObject, ObservableObject {
             }
             return
         }
-        if afterFinishing && repeatMode == .one {
-            seek(to: 0)
-            player?.play()
-            isPlaying = true
-            updateNowPlaying()
-        } else {
-            playQueueTrack(queue[index])
-        }
-    }
-
-    private func nextPlayableIndex(in queue: [MediaTrack], afterFinishing: Bool) -> Int? {
-        for _ in queue.indices {
-            guard let index = playbackOrder.advance(repeatMode: repeatMode, afterFinishing: afterFinishing) else { return nil }
-            if canPlay(queue[index]) { return index }
-        }
-        return nil
+        playQueueTrack(entry.track)
     }
 
     private func playQueueTrack(_ track: MediaTrack) {
-        // Restart even when adjacent playlist occurrences refer to the same song.
         stopPlayerOnly()
         currentTrack = nil
         play(track, preservingQueue: true)
@@ -366,20 +332,35 @@ final class MusicStore: NSObject, ObservableObject {
 
     func previous() {
         if progress > 4 { seek(to: 0); return }
-        guard let queue = playbackQueue else { return }
-        for _ in queue.indices {
-            guard let index = playbackOrder.previous(repeatMode: repeatMode) else { break }
-            if canPlay(queue[index]) {
-                playQueueTrack(queue[index])
-                return
-            }
-        }
-        seek(to: 0)
+        guard let entry = queue.previous(canPlay: canPlay) else { seek(to: 0); return }
+        playQueueTrack(entry.track)
     }
+
+    func addToQueue(_ track: MediaTrack) {
+        if !queue.add(track) { errorMessage = "The Queue can hold up to 1,000 upcoming songs." }
+    }
+
+    func queuePlayNext(_ id: UUID) {
+        if !queue.playNext(id) { errorMessage = "The Queue can hold up to 1,000 upcoming songs." }
+    }
+
+    func removeFromQueue(_ id: UUID) {
+        let isCurrent = queue.current?.id == id
+        queue.remove(id)
+        if isCurrent {
+            stopPlayerOnly()
+            currentTrack = nil
+            isPlaying = false
+            advancePlayback(afterFinishing: false)
+            if currentTrack == nil { updateNowPlaying(); deactivateAudioSession() }
+        }
+    }
+
+    func moveInQueue(_ id: UUID, up: Bool) { queue.move(id, up: up) }
 
     func toggleShuffle() {
         isShuffled.toggle()
-        playbackOrder.setShuffled(isShuffled)
+        if isShuffled { queue.shuffle() }
     }
 
     func cycleRepeat() { repeatMode = repeatMode.next }
@@ -531,11 +512,7 @@ final class MusicStore: NSObject, ObservableObject {
                 do {
                     try await self.api.ping(profile: profile)
                     guard !Task.isCancelled, self.profile == profile, self.connectionEnabled, self.connectionGeneration == generation else { return }
-                    let reconnected = !self.connectionAvailable
                     self.connectionAvailable = true
-                    if reconnected || Date().timeIntervalSince(self.lastPlaylistSync) >= 60 {
-                        await self.syncPlaylists()
-                    }
                 } catch {
                     guard !Task.isCancelled, self.profile == profile, self.connectionEnabled, self.connectionGeneration == generation else { return }
                     self.connectionAvailable = false
