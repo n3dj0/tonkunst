@@ -311,6 +311,15 @@ final class MusicStore: NSObject, ObservableObject {
         advancePlayback(afterFinishing: false)
     }
 
+    func startQueue() {
+        guard !isPlaying else { return }
+        if let entry = queue.current, canPlay(entry.track) {
+            play(entry.track, preservingQueue: true)
+        } else {
+            next()
+        }
+    }
+
     private func advancePlayback(afterFinishing: Bool) {
         guard let entry = queue.advance(repeatMode: repeatMode, afterFinishing: afterFinishing, canPlay: canPlay) else {
             if afterFinishing {

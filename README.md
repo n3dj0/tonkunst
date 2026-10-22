@@ -31,7 +31,7 @@ You can copy downloaded audio from Files. Keep the files in their Tonkunst folde
 
 ## Queue and playback
 
-Long-press a song in any song list and choose **Add to Queue**. The Queue holds up to 1,000 upcoming occurrences and the latest 100 played occurrences. Duplicate songs are supported. Tap a song in the library to play it immediately while retaining upcoming songs. With no current song, use **Start Queue**.
+Long-press a song in any song list and choose **Add to Queue**. The Queue holds up to 1,000 upcoming occurrences and the latest 100 played occurrences. Duplicate songs are supported. Tap a song in the library to play it immediately while retaining upcoming songs. Use the **Play** icon in the Queue toolbar, to the left of the connection and account controls, to start or resume the Queue.
 
 The Queue opens centered on the bold current song. Upcoming songs are above it, with the next song closest to the current song. Shaded played songs are below, newest first. Long-press for **Play Next**, **Delete from Queue**, **Move Up**, or **Move Down**. Movement follows the visual direction within upcoming or played songs; the current song remains the boundary. Play Next on a played/current song adds a new occurrence. Deleting the current song advances playback. The Queue is saved on this device after each change and restored after app relaunch, including history, the current song, and upcoming songs. Playback stays paused and resumes the current song from its beginning. Each account has its own saved Queue; switching accounts or signing out does not delete it. It does not sync to Jellyfin.
 

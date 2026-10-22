@@ -363,9 +363,6 @@ struct QueueView: View {
                                 if let entry = store.queue.current {
                                     queueRow(entry, state: "Now Playing")
                                         .id("current")
-                                } else if !store.queue.upcoming.isEmpty {
-                                    Button("Start Queue", systemImage: "play.fill") { store.next() }
-                                        .id("current")
                                 }
                                 ForEach(store.queue.history) { entry in
                                     queueRow(entry, state: "Played")
@@ -396,6 +393,12 @@ struct QueueView: View {
                 }
                 .sharedBackgroundVisibility(.hidden)
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button("Start Queue", systemImage: "play.fill") { store.startQueue() }
+                        .labelStyle(.iconOnly)
+                        .disabled(store.isPlaying || !(
+                            store.queue.current.map { store.canPlay($0.track) } == true ||
+                            store.queue.upcoming.contains { store.canPlay($0.track) }
+                        ))
                     ConnectionPill()
                     AccountButton(showAccount: $showAccount)
                 }
