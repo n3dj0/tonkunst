@@ -41,6 +41,17 @@ struct PlaybackQueue: Codable {
         current = entry
     }
 
+    mutating func select(_ id: UUID, canPlay: (MediaTrack) -> Bool) -> QueueEntry? {
+        guard let entry = (history + upcoming + (current.map { [$0] } ?? [])).first(where: { $0.id == id }),
+              canPlay(entry.track) else { return nil }
+        if current?.id != id {
+            history.removeAll { $0.id == id }
+            upcoming.removeAll { $0.id == id }
+            start(entry)
+        }
+        return entry
+    }
+
     mutating func advance(repeatMode: PlaybackRepeatMode, afterFinishing: Bool,
                           canPlay: (MediaTrack) -> Bool) -> QueueEntry? {
         if afterFinishing, repeatMode == .one, let current, canPlay(current.track) { return current }

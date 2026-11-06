@@ -349,6 +349,11 @@ final class MusicStore: NSObject, ObservableObject {
         if !queue.add(track) { errorMessage = "The Queue can hold up to 1,000 upcoming songs." }
     }
 
+    func playFromQueue(_ id: UUID) {
+        guard let entry = queue.select(id, canPlay: canPlay) else { return }
+        playQueueTrack(entry.track)
+    }
+
     func queuePlayNext(_ id: UUID) {
         if !queue.playNext(id) { errorMessage = "The Queue can hold up to 1,000 upcoming songs." }
     }

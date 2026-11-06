@@ -5,6 +5,7 @@ import Foundation
         MediaTrack(id: String(id), title: "Song \(id)", artist: "Artist", album: "Album", duration: 60, fileExtension: "mp3")
     }
     static func main() {
+        testQueueSelection()
         var queue = PlaybackQueue()
         assert(queue.advance(repeatMode: .off, afterFinishing: false, canPlay: { _ in true }) == nil)
         for i in 0..<1000 { assert(queue.add(track(i))) }
@@ -54,6 +55,8 @@ import Foundation
         saved.start(QueueEntry(track: song))
         saved.start(QueueEntry(track: track(8)))
         assert(saved.add(song) && saved.add(song))
+        let replayed = saved.history[0]
+        assert(saved.select(replayed.id, canPlay: { _ in true })?.id == replayed.id)
         do {
             try storage.save(saved, account: "account-a")
             try storage.save(PlaybackQueue(), account: "account-b")
@@ -77,5 +80,48 @@ import Foundation
         } catch { fatalError("Persistence test failed: \(error)") }
         print("Queue persistence tests passed: restoration, occurrence identities, account isolation, edits, credential stripping and corrupt storage.")
         print("Queue tests passed: limits, history, duplicates, ordering, removal, shuffle, repeat and unavailable songs.")
+    }
+
+    static func testQueueSelection() {
+        var queue = PlaybackQueue()
+        let oldest = QueueEntry(track: track(1))
+        let replayed = QueueEntry(track: track(2))
+        let duplicate = QueueEntry(track: track(2))
+        let previousCurrent = QueueEntry(track: track(3))
+        for entry in [oldest, replayed, duplicate, previousCurrent] { queue.start(entry) }
+        for i in 0..<PlaybackQueue.upcomingLimit { assert(queue.add(track(i))) }
+        let upcomingIDs = queue.upcoming.map(\.id)
+
+        // Replay an older occurrence even with a full upcoming queue, retaining other copies.
+        assert(queue.select(replayed.id, canPlay: { _ in true })?.id == replayed.id)
+        assert(queue.current?.id == replayed.id)
+        assert(queue.history.map(\.id) == [previousCurrent.id, duplicate.id, oldest.id])
+        assert(queue.upcoming.map(\.id) == upcomingIDs)
+
+        // Selecting the current occurrence must not duplicate it in history.
+        assert(queue.select(replayed.id, canPlay: { _ in true })?.id == replayed.id)
+        assert(queue.history.map(\.id) == [previousCurrent.id, duplicate.id, oldest.id])
+
+        // Repeatedly replaying history moves each selected occurrence instead of copying it.
+        assert(queue.select(duplicate.id, canPlay: { _ in true })?.id == duplicate.id)
+        assert(queue.history.map(\.id) == [replayed.id, previousCurrent.id, oldest.id])
+        assert(queue.select(replayed.id, canPlay: { _ in true })?.id == replayed.id)
+        assert(queue.history.map(\.id) == [duplicate.id, previousCurrent.id, oldest.id])
+
+        // Unavailable or stale selections leave every part of the queue intact.
+        assert(queue.select(oldest.id, canPlay: { _ in false }) == nil)
+        assert(queue.select(upcomingIDs[0], canPlay: { _ in false }) == nil)
+        assert(queue.select(UUID(), canPlay: { _ in true }) == nil)
+        assert(queue.current?.id == replayed.id)
+        assert(queue.history.map(\.id) == [duplicate.id, previousCurrent.id, oldest.id])
+        assert(queue.upcoming.map(\.id) == upcomingIDs)
+
+        // Upcoming selections consume only the selected occurrence, preserving the rest.
+        let selectedUpcoming = upcomingIDs[10]
+        assert(queue.select(selectedUpcoming, canPlay: { _ in true })?.id == selectedUpcoming)
+        assert(queue.current?.id == selectedUpcoming)
+        assert(queue.history.map(\.id) == [replayed.id, duplicate.id, previousCurrent.id, oldest.id])
+        assert(queue.upcoming.map(\.id) == upcomingIDs.filter { $0 != selectedUpcoming })
+        print("Queue selection tests passed: replay, occurrence identities, current selection, full queue, unavailable songs and upcoming order.")
     }
 }

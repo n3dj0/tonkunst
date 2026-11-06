@@ -366,7 +366,7 @@ struct QueueView: View {
                                 }
                                 if let entry = store.queue.current {
                                     queueRow(entry, state: "Now Playing")
-                                        .id("current")
+                                        .id(entry.id)
                                 }
                                 ForEach(store.queue.history) { entry in
                                     queueRow(entry, state: "Played")
@@ -376,9 +376,11 @@ struct QueueView: View {
                             .contentMargins(.top, max(0, geometry.size.height / 2 - 40), for: .scrollContent)
                             .contentMargins(.bottom, max(playerClearance, geometry.size.height / 2 - 40), for: .scrollContent)
                             .tonkunstBrandVisibility($isBrandVisible)
-                            .onAppear { proxy.scrollTo("current", anchor: .center) }
-                            .onChange(of: store.queue.current?.id) { _, _ in
-                                withAnimation { proxy.scrollTo("current", anchor: .center) }
+                            .onAppear {
+                                if let id = store.queue.current?.id { proxy.scrollTo(id, anchor: .center) }
+                            }
+                            .onChange(of: store.queue.current?.id) { _, id in
+                                if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
                             }
                         }
                     }
@@ -411,19 +413,26 @@ struct QueueView: View {
     }
 
     private func queueRow(_ entry: QueueEntry, state: String) -> some View {
-        HStack(spacing: 12) {
-            Artwork(track: entry.track, size: 48)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(entry.track.title).fontWeight(state == "Now Playing" ? .bold : .regular)
-                Text("\(entry.track.artist) · \(state)").font(.caption).foregroundStyle(.secondary)
+        Button {
+            store.playFromQueue(entry.id)
+        } label: {
+            HStack(spacing: 12) {
+                Artwork(track: entry.track, size: 48)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.track.title).fontWeight(state == "Now Playing" ? .bold : .regular)
+                    Text("\(entry.track.artist) · \(state)").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if store.offline.contains(entry.track) { OfflineBadge() }
+                Text(entry.track.formattedDuration).font(.caption.monospacedDigit())
             }
-            Spacer()
-            if store.offline.contains(entry.track) { OfflineBadge() }
-            Text(entry.track.formattedDuration).font(.caption.monospacedDigit())
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .disabled(!store.canPlay(entry.track))
+        .accessibilityHint("Play this song from the beginning")
         .foregroundStyle(state == "Played" ? .secondary : .primary)
         .listRowBackground(state == "Played" ? Color.gray.opacity(0.15) : Color.clear)
-        .contentShape(Rectangle())
         .contextMenu {
             Button("Add to Queue", systemImage: "text.badge.plus") { store.addToQueue(entry.track) }
             Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") { store.queuePlayNext(entry.id) }
