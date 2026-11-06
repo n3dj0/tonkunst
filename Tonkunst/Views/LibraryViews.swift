@@ -281,7 +281,11 @@ struct ArtistsView: View {
             .overlay {
                 if artists.isEmpty {
                     if filter.isEmpty {
-                        ContentUnavailableView("No Artists", systemImage: "person.2")
+                        ContentUnavailableView(
+                            "No Artists",
+                            systemImage: "person.2",
+                            description: Text("Artists from your music library will appear here.")
+                        )
                     } else {
                         ContentUnavailableView.search(text: filter)
                     }
