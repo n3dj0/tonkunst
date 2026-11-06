@@ -1,25 +1,25 @@
 import Foundation
 
-enum PlaybackRepeatMode: String {
+enum PlaybackRepeatMode: String, Sendable {
     case off, all, one
 
     var next: Self { self == .off ? .all : (self == .all ? .one : .off) }
     var accessibilityValue: String {
         switch self {
-        case .off: return "Off"
-        case .all: return "All songs"
-        case .one: return "One song"
+        case .off: return String(localized: "Off", bundle: AppLocalization.bundle)
+        case .all: return String(localized: "All songs", bundle: AppLocalization.bundle)
+        case .one: return String(localized: "One song", bundle: AppLocalization.bundle)
         }
     }
 }
 
 // Each occurrence has its own identity, including repeated songs.
-struct QueueEntry: Identifiable, Codable {
+struct QueueEntry: Identifiable, Codable, Sendable {
     var id = UUID()
     var track: MediaTrack
 }
 
-struct PlaybackQueue: Codable {
+struct PlaybackQueue: Codable, Sendable {
     static let historyLimit = 100
     static let upcomingLimit = 1000
     private(set) var history: [QueueEntry] = [] // newest first
@@ -125,17 +125,7 @@ extension PlaybackQueue {
     func authorizing(with token: String?) -> PlaybackQueue {
         func entry(_ value: QueueEntry) -> QueueEntry {
             var value = value
-            // Restore authentication on Jellyfin URLs even after stripping their old token.
-            func authorizedURL(_ original: URL?) -> URL? {
-                guard let original,
-                      var parts = URLComponents(url: original, resolvingAgainstBaseURL: false) else { return original }
-                parts.queryItems = (parts.queryItems ?? []).filter { $0.name.lowercased() != "api_key" }
-                if let token { parts.queryItems?.append(URLQueryItem(name: "api_key", value: token)) }
-                return parts.url
-            }
-            value.track.artworkURL = authorizedURL(value.track.artworkURL)
-            value.track.streamURL = authorizedURL(value.track.streamURL)
-            value.track.fallbackStreamURL = authorizedURL(value.track.fallbackStreamURL)
+            value.track = value.track.authorizing(with: token)
             return value
         }
         var result = self
@@ -146,8 +136,8 @@ extension PlaybackQueue {
     }
 }
 
-struct QueueStorage {
-    var fileURL: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+struct QueueStorage: Sendable {
+    var fileURL: URL = URL.applicationSupportDirectory
         .appendingPathComponent("Tonkunst/queues.json")
 
     func load(account: String, token: String?) throws -> PlaybackQueue {
@@ -157,13 +147,77 @@ struct QueueStorage {
     func save(_ queue: PlaybackQueue, account: String) throws {
         var accounts = try read()
         accounts[account] = queue.authorizing(with: nil)
-        let data = try JSONEncoder().encode(accounts)
+        try write(accounts)
+    }
+
+    fileprivate func write(_ accounts: [String: PlaybackQueue]) throws {
+        let data = try JSONEncoder().encode(accounts.mapValues { $0.authorizing(with: nil) })
         try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: fileURL, options: .atomic)
     }
 
-    private func read() throws -> [String: PlaybackQueue] {
+    fileprivate func read() throws -> [String: PlaybackQueue] {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return [:] }
         return try JSONDecoder().decode([String: PlaybackQueue].self, from: Data(contentsOf: fileURL))
+    }
+}
+
+/// Owns the archive and serializes writes outside the main actor. The store
+/// chains save tasks; loading waits for those tasks before changing accounts.
+actor QueueRepository {
+    struct Restoration: Sendable {
+        let queue: PlaybackQueue
+        let recoveredArchive: URL?
+    }
+    private let storage: QueueStorage
+    private var accounts: [String: PlaybackQueue]?
+    private var recoveredArchive: URL?
+
+    init(storage: QueueStorage = QueueStorage()) { self.storage = storage }
+
+    func load(account: String, profile: ServerProfile?) throws -> Restoration {
+        try prepare()
+        let stored = accounts?[account] ?? PlaybackQueue()
+        // Apply account-aware authorization to all retained occurrences.
+        let object = stored.authorizing(with: nil).mappingTracks { $0.authorizing(for: profile) }
+        let result = Restoration(queue: object, recoveredArchive: recoveredArchive)
+        recoveredArchive = nil
+        return result
+    }
+
+    func save(_ queue: PlaybackQueue, account: String) throws {
+        try prepare()
+        var updated = accounts ?? [:]
+        updated[account] = queue.authorizing(with: nil)
+        try storage.write(updated)
+        accounts = updated
+    }
+
+    private func prepare() throws {
+        guard accounts == nil else { return }
+        do { accounts = try storage.read() }
+        catch is DecodingError {
+            let backup = storage.fileURL.deletingLastPathComponent()
+                .appendingPathComponent("queues.corrupt-\(UUID().uuidString).json")
+            // Never discard a corrupt archive or mask a filesystem failure.
+            try FileManager.default.moveItem(at: storage.fileURL, to: backup)
+            recoveredArchive = backup
+            accounts = [:]
+        }
+    }
+}
+
+extension PlaybackQueue {
+    func mappingTracks(_ transform: (MediaTrack) -> MediaTrack) -> Self {
+        var result = self
+        func entry(_ value: QueueEntry) -> QueueEntry {
+            var value = value
+            value.track = transform(value.track)
+            return value
+        }
+        result.history = history.map(entry)
+        result.current = current.map(entry)
+        result.upcoming = upcoming.map(entry)
+        return result
     }
 }

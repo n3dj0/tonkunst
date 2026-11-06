@@ -16,7 +16,7 @@ struct Artwork: View {
 struct OfflineBadge: View { var body: some View { Image(systemName: "iphone.gen3").font(.caption.weight(.semibold)).foregroundStyle(.secondary).accessibilityLabel("Available offline") } }
 
 struct SongRow: View {
-    @EnvironmentObject private var store: MusicStore
+    @Environment(MusicStore.self) private var store
     let track: MediaTrack
     var action: (() -> Void)? = nil
     var body: some View {
@@ -24,12 +24,22 @@ struct SongRow: View {
             if let action { action() } else { store.play(track) }
         } label: {
             HStack(spacing: 12) { Artwork(track: track, size: 48); VStack(alignment: .leading, spacing: 3) { Text(track.title).font(.body.weight(.medium)).lineLimit(1); Text("\(track.artist) · \(track.album)").font(.caption).foregroundStyle(.secondary).lineLimit(1) }; Spacer(); if store.offline.contains(track) { OfflineBadge() }; Text(track.formattedDuration).font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
-        }.buttonStyle(.plain).disabled(!store.canPlay(track)).contextMenu { Button("Add to Queue", systemImage: "text.badge.plus") { store.addToQueue(track) }; Button(store.offline.contains(track) ? "Remove Download" : "Download for Offline", systemImage: store.offline.contains(track) ? "trash" : "arrow.down.circle") { Task { await store.toggleDownload(track) } } }
+        }
+        .buttonStyle(.plain)
+        .disabled(!store.canPlay(track))
+        .contextMenu {
+            Button("Add to Queue", systemImage: "text.badge.plus") { store.addToQueue(track) }
+            Button(store.offline.contains(track) ? String(localized: "Remove Download", bundle: AppLocalization.bundle) : String(localized: "Download for Offline", bundle: AppLocalization.bundle),
+                   systemImage: store.offline.contains(track) ? "trash" : "arrow.down.circle") {
+                Task { await store.toggleDownload(track) }
+            }
+            .disabled(store.offline.downloading.contains(track.id))
+        }
     }
 }
 
 struct ConnectionPill: View {
-    @EnvironmentObject private var store: MusicStore
+    @Environment(MusicStore.self) private var store
 
     private var willDisconnect: Bool {
         store.connectionEnabled && (store.connectionAvailable || store.isConnecting)
@@ -48,7 +58,7 @@ struct ConnectionPill: View {
         if store.profile != nil {
             Button { store.toggleConnection() } label: { statusLabel }
                 .buttonStyle(.plain)
-                .accessibilityLabel(willDisconnect ? "Disconnect from Jellyfin" : "Connect to Jellyfin")
+                .accessibilityLabel(willDisconnect ? String(localized: "Disconnect from Jellyfin", bundle: AppLocalization.bundle) : String(localized: "Connect to Jellyfin", bundle: AppLocalization.bundle))
         } else {
             statusLabel
         }
@@ -56,7 +66,7 @@ struct ConnectionPill: View {
 }
 
 private struct ConnectionModeToastModifier: ViewModifier {
-    @EnvironmentObject private var store: MusicStore
+    @Environment(MusicStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
@@ -105,10 +115,23 @@ enum AmbientStyle: String, CaseIterable {
     case standard, aurora, dusk, lagoon, ember
 
     static let storageKey = "ambientBackground"
-    var title: String { rawValue.capitalized }
+    var title: String {
+        switch self {
+        case .standard: String(localized: "Standard", bundle: AppLocalization.bundle)
+        case .aurora: String(localized: "Aurora", bundle: AppLocalization.bundle)
+        case .dusk: String(localized: "Dusk", bundle: AppLocalization.bundle)
+        case .lagoon: String(localized: "Lagoon", bundle: AppLocalization.bundle)
+        case .ember: String(localized: "Ember", bundle: AppLocalization.bundle)
+        }
+    }
     var next: Self {
-        let styles = Self.allCases
-        return styles[(styles.firstIndex(of: self)! + 1) % styles.count]
+        switch self {
+        case .standard: .aurora
+        case .aurora: .dusk
+        case .dusk: .lagoon
+        case .lagoon: .ember
+        case .ember: .standard
+        }
     }
 
     var colors: [Color] {

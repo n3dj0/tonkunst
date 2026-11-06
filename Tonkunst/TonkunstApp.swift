@@ -3,7 +3,7 @@ import UIKit
 
 @main
 struct TonkunstApp: App {
-    @StateObject private var store = MusicStore()
+    @State private var store = MusicStore()
 
     init() {
         let appearance = UINavigationBarAppearance()
@@ -23,7 +23,7 @@ struct TonkunstApp: App {
     var body: some Scene {
         WindowGroup {
             LibraryView()
-                .environmentObject(store)
+                .environment(store)
                 .task { await store.start() }
                 .disabled(store.isRestoringSession)
                 .tint(.primary)

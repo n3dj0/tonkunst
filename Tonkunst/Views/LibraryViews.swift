@@ -1,7 +1,8 @@
 import SwiftUI
+import UIKit
 
 struct LibraryView: View {
-    @EnvironmentObject private var store: MusicStore
+    @Environment(MusicStore.self) private var store
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab = 0
     @State private var showPlayer = false
@@ -19,18 +20,25 @@ struct LibraryView: View {
         .connectionModeToast()
         .sheet(isPresented: $showPlayer) {
             NowPlayingView()
-                .environmentObject(store)
-                .presentationDetents([.height(640)])
+                .environment(store)
+                .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showAccount) {
             AccountView()
-                .environmentObject(store)
+                .environment(store)
                 .presentationDetents([.height(560), .large])
                 .presentationDragIndicator(.visible)
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { store.recheckConnection() }
+            if phase == .background {
+                Task {
+                    let token = UIApplication.shared.beginBackgroundTask(withName: String(localized: "Save Queue", bundle: AppLocalization.bundle))
+                    await store.flushPersistence()
+                    if token != .invalid { UIApplication.shared.endBackgroundTask(token) }
+                }
+            }
         }
         .onChange(of: store.errorMessage) { _, errorMessage in
             displayedError = errorMessage
@@ -59,7 +67,7 @@ private extension EnvironmentValues {
 }
 
 private struct MiniPlayerContainer: ViewModifier {
-    @EnvironmentObject private var store: MusicStore
+    @Environment(MusicStore.self) private var store
     @Binding var expanded: Bool
     @State private var playerHeight: CGFloat = 0
 
@@ -126,7 +134,7 @@ private extension View {
         prompt: String
     ) -> some View {
         if isRevealed {
-            searchable(text: text, placement: .toolbar, prompt: prompt)
+            searchable(text: text, placement: .toolbar, prompt: Text(LocalizedStringKey(prompt)))
         } else {
             self
         }
@@ -173,7 +181,7 @@ struct ScreenHeader: View {
 }
 
 struct SongsView: View {
-    @EnvironmentObject private var store: MusicStore
+    @Environment(MusicStore.self) private var store
     @Binding var showAccount: Bool
     @State private var filter = ""
     @State private var isBrandVisible = true
@@ -201,11 +209,11 @@ struct SongsView: View {
                             if songs.isEmpty {
                                 if filter.isEmpty {
                                     ContentUnavailableView(
-                                        store.connectionAvailable ? "No Songs Yet" : "No Downloaded Songs",
+                                        store.connectionAvailable ? String(localized: "No Songs Yet", bundle: AppLocalization.bundle) : String(localized: "No Downloaded Songs", bundle: AppLocalization.bundle),
                                         systemImage: "music.note",
                                         description: Text(store.connectionAvailable
-                                            ? "Your Jellyfin music library is empty."
-                                            : "Connect to Jellyfin and download songs to listen offline.")
+                                            ? String(localized: "Your Jellyfin music library is empty.", bundle: AppLocalization.bundle)
+                                            : String(localized: "Connect to Jellyfin and download songs to listen offline.", bundle: AppLocalization.bundle))
                                     )
                                 } else {
                                     ContentUnavailableView.search(text: filter)
@@ -213,12 +221,12 @@ struct SongsView: View {
                             }
                         }
                         .revealSearchOnPull($isSearchRevealed)
-                        .pullToSearch(isRevealed: isSearchRevealed, text: $filter, prompt: "Songs, artists, albums")
+                        .pullToSearch(isRevealed: isSearchRevealed, text: $filter, prompt: String(localized: "Songs, artists, albums", bundle: AppLocalization.bundle))
                 }
             }
             .libraryHeaderSpacing()
             .ambientScreen()
-            .navigationTitle(isBrandVisible ? "" : "Songs")
+            .navigationTitle(isBrandVisible ? "" : String(localized: "Songs", bundle: AppLocalization.bundle))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -235,7 +243,7 @@ struct SongsView: View {
 }
 
 struct ArtistsView: View {
-    @EnvironmentObject private var store: MusicStore
+    @Environment(MusicStore.self) private var store
     @Binding var showAccount: Bool
     @State private var filter = ""
     @State private var isBrandVisible = true
@@ -254,7 +262,7 @@ struct ArtistsView: View {
                 Group {
                     ForEach(artists, id: \.name) { artist in
                         NavigationLink {
-                            ArtistTracksView(artist: artist.name, tracks: artist.tracks)
+                            ArtistTracksView(artist: artist.name)
                         } label: {
                             HStack {
                                 Circle()
@@ -294,9 +302,9 @@ struct ArtistsView: View {
             }
             .libraryHeaderSpacing()
             .ambientScreen()
-            .navigationTitle(isBrandVisible ? "" : "Artists")
+            .navigationTitle(isBrandVisible ? "" : String(localized: "Artists", bundle: AppLocalization.bundle))
             .navigationBarTitleDisplayMode(.inline)
-            .pullToSearch(isRevealed: isSearchRevealed, text: $filter, prompt: "Search artists")
+            .pullToSearch(isRevealed: isSearchRevealed, text: $filter, prompt: String(localized: "Search artists", bundle: AppLocalization.bundle))
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if isBrandVisible { TonkunstBrand() }
@@ -312,14 +320,13 @@ struct ArtistsView: View {
 }
 
 private struct ArtistTracksView: View {
-    @EnvironmentObject private var store: MusicStore
+    @Environment(MusicStore.self) private var store
     let artist: String
-    let tracks: [MediaTrack]
     @State private var filter = ""
     @State private var isSearchRevealed = false
 
     private var filteredTracks: [MediaTrack] {
-        tracks.filter { store.canPlay($0) && (filter.isEmpty || $0.matches(filter)) }
+        store.tracks.filter { $0.artist == artist && store.canPlay($0) && (filter.isEmpty || $0.matches(filter)) }
     }
 
     var body: some View {
@@ -338,12 +345,23 @@ private struct ArtistTracksView: View {
         .ambientScreen()
         .navigationTitle(artist)
         .navigationBarTitleDisplayMode(.inline)
-        .pullToSearch(isRevealed: isSearchRevealed, text: $filter, prompt: "Songs, albums")
+        .pullToSearch(isRevealed: isSearchRevealed, text: $filter, prompt: String(localized: "Songs, albums", bundle: AppLocalization.bundle))
+    }
+}
+
+private enum QueueRowState {
+    case upcoming, current, played
+    var title: String {
+        switch self {
+        case .upcoming: String(localized: "Upcoming", bundle: AppLocalization.bundle)
+        case .current: String(localized: "Now Playing", bundle: AppLocalization.bundle)
+        case .played: String(localized: "Played", bundle: AppLocalization.bundle)
+        }
     }
 }
 
 struct QueueView: View {
-    @EnvironmentObject private var store: MusicStore
+    @Environment(MusicStore.self) private var store
     @Environment(\.miniPlayerClearance) private var playerClearance
     @Environment(\.colorSchemeContrast) private var colorContrast
     @Binding var showAccount: Bool
@@ -372,17 +390,17 @@ struct QueueView: View {
                                         .listRowBackground(Color.clear)
                                 }
                                 ForEach(Array(store.queue.upcoming.reversed())) { entry in
-                                    queueRow(entry, state: "Upcoming")
+                                    queueRow(entry, state: .upcoming)
                                         // Shared dividers must also be hidden on the neighboring row.
                                         .listRowSeparator(store.queue.current != nil && entry.id == store.queue.upcoming.first?.id ? .hidden : .visible,
                                                           edges: .bottom)
                                 }
                                 if let entry = store.queue.current {
-                                    queueRow(entry, state: "Now Playing")
+                                    queueRow(entry, state: .current)
                                         .id(entry.id)
                                 }
                                 ForEach(store.queue.history) { entry in
-                                    queueRow(entry, state: "Played")
+                                    queueRow(entry, state: .played)
                                         .listRowSeparator(store.queue.current != nil && entry.id == store.queue.history.first?.id ? .hidden : .visible,
                                                           edges: .top)
                                 }
@@ -411,7 +429,7 @@ struct QueueView: View {
             }
             .libraryHeaderSpacing()
             .ambientScreen()
-            .navigationTitle(isBrandVisible ? "" : "Queue")
+            .navigationTitle(isBrandVisible ? "" : String(localized: "Queue", bundle: AppLocalization.bundle))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -432,15 +450,15 @@ struct QueueView: View {
         }
     }
 
-    private func queueRow(_ entry: QueueEntry, state: String) -> some View {
+    private func queueRow(_ entry: QueueEntry, state: QueueRowState) -> some View {
         Button {
             store.playFromQueue(entry.id)
         } label: {
             HStack(spacing: 12) {
                 Artwork(track: entry.track, size: 48)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(entry.track.title).fontWeight(state == "Now Playing" ? .bold : .regular)
-                    Text("\(entry.track.artist) · \(state)").font(.caption).foregroundStyle(.secondary)
+                    Text(entry.track.title).fontWeight(state == .current ? .bold : .regular)
+                    Text("\(entry.track.artist) · \(state.title)").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if store.offline.contains(entry.track) { OfflineBadge() }
@@ -451,8 +469,8 @@ struct QueueView: View {
         .buttonStyle(.plain)
         .disabled(!store.canPlay(entry.track))
         .accessibilityHint("Play this song from the beginning")
-        .foregroundStyle(state == "Played" ? .secondary : .primary)
-        .listRowSeparator(state == "Now Playing" ? .hidden : .visible)
+        .foregroundStyle(state == .played ? .secondary : .primary)
+        .listRowSeparator(state == .current ? .hidden : .visible)
         .listRowBackground(queueRowBackground(state))
         .contextMenu {
             Button("Add to Queue", systemImage: "text.badge.plus") { store.addToQueue(entry.track) }
@@ -466,8 +484,8 @@ struct QueueView: View {
     }
 
     @ViewBuilder
-    private func queueRowBackground(_ state: String) -> some View {
-        if state == "Now Playing" {
+    private func queueRowBackground(_ state: QueueRowState) -> some View {
+        if state == .current {
             VStack(spacing: 0) {
                 currentSongBoundary
                 Spacer(minLength: 0)
@@ -475,7 +493,7 @@ struct QueueView: View {
             }
             .accessibilityHidden(true)
         } else {
-            state == "Played" ? Color.gray.opacity(0.15) : Color.clear
+            state == .played ? Color.gray.opacity(0.15) : Color.clear
         }
     }
 
@@ -490,7 +508,7 @@ struct QueueView: View {
 }
 
 struct OfflineView: View {
-    @EnvironmentObject private var store: MusicStore
+    @Environment(MusicStore.self) private var store
     @Binding var showAccount: Bool
     @State private var filter = ""
     @State private var isBrandVisible = true
@@ -523,9 +541,9 @@ struct OfflineView: View {
             }
             .libraryHeaderSpacing()
             .ambientScreen()
-            .navigationTitle(isBrandVisible ? "" : "Offline")
+            .navigationTitle(isBrandVisible ? "" : String(localized: "Offline", bundle: AppLocalization.bundle))
             .navigationBarTitleDisplayMode(.inline)
-            .pullToSearch(isRevealed: isSearchRevealed, text: $filter, prompt: "Songs, artists, albums")
+            .pullToSearch(isRevealed: isSearchRevealed, text: $filter, prompt: String(localized: "Songs, artists, albums", bundle: AppLocalization.bundle))
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if isBrandVisible { TonkunstBrand() }
@@ -541,7 +559,7 @@ struct OfflineView: View {
 }
 
 struct SearchView: View {
-    @EnvironmentObject private var store: MusicStore
+    @Environment(MusicStore.self) private var store
     @Binding var showAccount: Bool
     @State private var query = ""
     @FocusState private var isSearchFocused: Bool
@@ -573,7 +591,7 @@ struct SearchView: View {
             .ambientScreen()
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $query, prompt: "Search your collection")
+            .searchable(text: $query, prompt: String(localized: "Search your collection", bundle: AppLocalization.bundle))
             .searchPresentationToolbarBehavior(.avoidHidingContent)
             .searchFocused($isSearchFocused)
             .onAppear {
@@ -607,7 +625,7 @@ private extension MediaTrack {
 }
 
 struct AccountButton: View {
-    @EnvironmentObject private var store: MusicStore
+    @Environment(MusicStore.self) private var store
     @Binding var showAccount: Bool
     var body: some View {
         Button { showAccount = true } label: { ProfileAvatar(url: store.profile?.avatarURL) }
@@ -617,7 +635,7 @@ struct AccountButton: View {
 }
 
 struct WelcomeView: View {
-    @EnvironmentObject private var store: MusicStore
+    @Environment(MusicStore.self) private var store
     @Binding var showAccount: Bool
 
     var body: some View {
@@ -629,7 +647,7 @@ struct WelcomeView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 30)
-            Button(store.savedProfiles.isEmpty ? "Connect to Jellyfin" : "Choose Saved Account") {
+            Button(store.savedProfiles.isEmpty ? String(localized: "Connect to Jellyfin", bundle: AppLocalization.bundle) : String(localized: "Choose Saved Account", bundle: AppLocalization.bundle)) {
                 showAccount = true
             }
             .buttonStyle(.borderedProminent)

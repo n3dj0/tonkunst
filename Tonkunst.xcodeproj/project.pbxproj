@@ -20,6 +20,11 @@
 		B00000000000000000000011 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000012 /* Assets.xcassets */; };
 		B00000000000000000000013 /* tonkunst.icon in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000015 /* tonkunst.icon */; };
 		B00000000000000000000014 /* PlaybackQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000016 /* PlaybackQueue.swift */; };
+		B00000000000000000000017 /* PlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000017 /* PlaybackController.swift */; };
+		B00000000000000000000018 /* SystemPlayback.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000018 /* SystemPlayback.swift */; };
+		B00000000000000000000019 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000019 /* Localizable.xcstrings */; };
+		B00000000000000000000020 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000020 /* PrivacyInfo.xcprivacy */; };
+		B00000000000000000000021 /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000021 /* InfoPlist.xcstrings */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -38,6 +43,11 @@
 		A00000000000000000000013 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A00000000000000000000015 /* tonkunst.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = tonkunst.icon; sourceTree = "<group>"; };
 		A00000000000000000000016 /* PlaybackQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackQueue.swift; sourceTree = "<group>"; };
+		A00000000000000000000017 /* PlaybackController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackController.swift; sourceTree = "<group>"; };
+		A00000000000000000000018 /* SystemPlayback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemPlayback.swift; sourceTree = "<group>"; };
+		A00000000000000000000019 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
+		A00000000000000000000020 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		A00000000000000000000021 /* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = InfoPlist.xcstrings; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -88,6 +98,8 @@
 				A00000000000000000000004 /* KeychainStore.swift */,
 				A00000000000000000000005 /* JellyfinAPI.swift */,
 				A00000000000000000000006 /* OfflineLibrary.swift */,
+				A00000000000000000000018 /* SystemPlayback.swift */,
+				A00000000000000000000017 /* PlaybackController.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -116,6 +128,9 @@
 			isa = PBXGroup;
 			children = (
 				A00000000000000000000012 /* Assets.xcassets */,
+				A00000000000000000000021 /* InfoPlist.xcstrings */,
+				A00000000000000000000020 /* PrivacyInfo.xcprivacy */,
+				A00000000000000000000019 /* Localizable.xcstrings */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -176,6 +191,7 @@
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
+				de,
 				Base,
 			);
 			mainGroup = C00000000000000000000001;
@@ -194,6 +210,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				B00000000000000000000011 /* Assets.xcassets in Resources */,
+				B00000000000000000000021 /* InfoPlist.xcstrings */,
+				B00000000000000000000020 /* PrivacyInfo.xcprivacy */,
+				B00000000000000000000019 /* Localizable.xcstrings */,
 				B00000000000000000000013 /* tonkunst.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -210,6 +229,8 @@
 				B00000000000000000000003 /* KeychainStore.swift in Sources */,
 				B00000000000000000000004 /* JellyfinAPI.swift in Sources */,
 				B00000000000000000000005 /* OfflineLibrary.swift in Sources */,
+				B00000000000000000000018 /* SystemPlayback.swift */,
+				B00000000000000000000017 /* PlaybackController.swift */,
 				B00000000000000000000006 /* MusicStore.swift in Sources */,
 				B00000000000000000000014 /* PlaybackQueue.swift in Sources */,
 				B00000000000000000000007 /* Components.swift in Sources */,
@@ -264,9 +285,11 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SDKROOT = iphoneos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
+				SWIFT_STRICT_CONCURRENCY = complete;
 			};
 			name = Debug;
 		};
@@ -313,7 +336,8 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
+				SWIFT_STRICT_CONCURRENCY = complete;
 			};
 			name = Release;
 		};
@@ -330,7 +354,8 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.nedjo.tonkunst;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
+				SWIFT_STRICT_CONCURRENCY = complete;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
@@ -348,7 +373,8 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.nedjo.tonkunst;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
+				SWIFT_STRICT_CONCURRENCY = complete;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;

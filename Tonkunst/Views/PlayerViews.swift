@@ -2,27 +2,44 @@ import SwiftUI
 import AVKit
 
 struct MiniPlayer: View {
-    @EnvironmentObject private var store: MusicStore
+    @Environment(MusicStore.self) private var store
     @Binding var expanded: Bool
     var body: some View {
         if let track = store.currentTrack {
-            Button { expanded = true } label: {
-                HStack(spacing: 11) {
-                    Artwork(track: track, size: 46)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(track.title).font(.subheadline.weight(.semibold)).lineLimit(1)
-                        Text(track.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            HStack(spacing: 0) {
+                Button { expanded = true } label: {
+                    HStack(spacing: 11) {
+                        Artwork(track: track, size: 46)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(track.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                            Text(track.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
                     }
-                    Spacer()
-                    Button { store.previous() } label: { Image(systemName: "backward.fill").foregroundStyle(.primary) }.buttonStyle(.borderless)
-                    Button { store.togglePlay() } label: { Image(systemName: store.isPlaying ? "pause.fill" : "play.fill").font(.title3).foregroundStyle(.primary) }.buttonStyle(.borderless)
-                    Button { store.next() } label: { Image(systemName: "forward.fill").foregroundStyle(.primary) }.buttonStyle(.borderless)
+                    .contentShape(Rectangle())
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .contentShape(Capsule())
+                .accessibilityLabel("Now Playing: \(track.title), \(track.artist)")
+                .accessibilityHint("Opens playback controls")
+
+                Button { store.previous() } label: {
+                    Image(systemName: "backward.fill").frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("Previous track")
+                Button { store.togglePlay() } label: {
+                    Image(systemName: store.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.title3).frame(width: 44, height: 44)
+                }
+                .accessibilityLabel(store.isPlaying ? String(localized: "Pause", bundle: AppLocalization.bundle) : String(localized: "Play", bundle: AppLocalization.bundle))
+                Button { store.next() } label: {
+                    Image(systemName: "forward.fill").frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("Next track")
             }
+            .padding(.leading, 14)
+            .padding(.trailing, 6)
+            .padding(.vertical, 10)
             .buttonStyle(.plain)
+            .foregroundStyle(.primary)
             .tint(.primary)
             .glassEffect(.regular.interactive())
         }
@@ -30,89 +47,46 @@ struct MiniPlayer: View {
 }
 
 struct NowPlayingView: View {
-    @EnvironmentObject private var store: MusicStore
+    @Environment(MusicStore.self) private var store
     @Environment(\.dismiss) private var dismiss
+
     var body: some View {
         NavigationStack {
             GeometryReader { proxy in
-                VStack(spacing: 24) {
-                    if let track = store.currentTrack {
-                        Artwork(
-                            track: track,
-                            size: max(0, min(proxy.size.width - 56, max(285, proxy.size.height * 0.42)))
-                        )
-                            .shadow(color: .black.opacity(0.23), radius: 20, y: 10)
-                        VStack(spacing: 6) {
-                            Text(track.title).font(.title2.weight(.bold)).multilineTextAlignment(.center)
-                            Text(track.artist).foregroundStyle(.secondary)
-                            Text(track.album).font(.subheadline).foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal, 26)
-                        VStack(spacing: 7) {
-                            Slider(value: Binding(get: { store.progress }, set: { store.seek(to: $0) }), in: 0...max(store.playbackDuration, 1))
-                            HStack {
-                                Text(time(store.progress)); Spacer()
-                                Text("-\(time(max(0, store.playbackDuration - store.progress)))")
-                            }.font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal, 26)
-                        HStack(spacing: 8) {
-                            Button { store.toggleShuffle() } label: {
-                                Image(systemName: "shuffle")
-                                    .foregroundStyle(.primary)
-                                    .frame(width: 44, height: 44)
-                                    .background(store.isShuffled ? Color.primary.opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 12))
+                ScrollView {
+                    VStack(spacing: 24) {
+                        if let track = store.currentTrack {
+                            Artwork(track: track, size: max(0, min(proxy.size.width - 56, max(160, min(360, proxy.size.height * 0.4)))))
+                                .shadow(color: .black.opacity(0.23), radius: 20, y: 10)
+                                .accessibilityHidden(true)
+                            VStack(spacing: 6) {
+                                Text(track.title).font(.title2.weight(.bold))
+                                Text(track.artist).foregroundStyle(.secondary)
+                                Text(track.album).font(.subheadline).foregroundStyle(.secondary)
                             }
-                                .accessibilityLabel("Shuffle")
-                                .accessibilityValue(store.isShuffled ? "On" : "Off")
-                                .accessibilityAddTraits(store.isShuffled ? .isSelected : [])
-                            Button { store.skip(-15) } label: { Image(systemName: "gobackward.15") }
-                                .accessibilityLabel("Back 15 seconds")
-                            Button { store.previous() } label: { Image(systemName: "backward.fill").font(.title2) }
-                                .accessibilityLabel("Previous track")
-                            Button { store.togglePlay() } label: { Image(systemName: store.isPlaying ? "pause.circle.fill" : "play.circle.fill").font(.system(size: 64)) }
-                                .accessibilityLabel(store.isPlaying ? "Pause" : "Play")
-                            Button { store.next() } label: { Image(systemName: "forward.fill").font(.title2) }
-                                .accessibilityLabel("Next track")
-                            Button { store.skip(15) } label: { Image(systemName: "goforward.15") }
-                                .accessibilityLabel("Forward 15 seconds")
-                            Button { store.cycleRepeat() } label: {
-                                Image(systemName: store.repeatMode == .one ? "repeat.1" : "repeat")
-                                    .foregroundStyle(.primary)
-                                    .frame(width: 44, height: 44)
-                                    .background(store.repeatMode != .off ? Color.primary.opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 12))
-                            }
-                                .accessibilityLabel("Repeat")
-                                .accessibilityValue(store.repeatMode.accessibilityValue)
-                                .accessibilityAddTraits(store.repeatMode != .off ? .isSelected : [])
+                            .multilineTextAlignment(.center)
+                            .accessibilityElement(children: .combine)
+                            PlaybackPositionView()
+                            transportControls
+                        } else {
+                            ContentUnavailableView("Nothing Playing", systemImage: "music.note")
                         }
-                        .font(.title3)
-                        .buttonStyle(.plain)
-                    } else {
-                        ContentUnavailableView("Nothing Playing", systemImage: "music.note")
                     }
-                    Spacer(minLength: 0)
+                    .padding(24)
+                    .frame(maxWidth: .infinity, minHeight: max(0, proxy.size.height))
                 }
-                .frame(maxWidth: .infinity, minHeight: proxy.size.height)
-                .padding()
+                .scrollBounceBehavior(.basedOnSize)
             }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Done") { dismiss() }
-                        .tint(Color.primary)
-                        .foregroundStyle(Color.primary)
-                }
+                ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    RoutePickerView()
-                        .frame(width: 30, height: 30)
-                        .accessibilityLabel("AirPlay")
+                    RoutePickerView().frame(width: 44, height: 44).accessibilityLabel("AirPlay")
                     if let track = store.currentTrack {
                         Button { Task { await store.toggleDownload(track) } } label: {
                             Image(systemName: store.offline.contains(track) ? "iphone.gen3" : "arrow.down.circle")
-                                .foregroundStyle(Color.primary)
                         }
-                        .tint(Color.primary)
-                        .accessibilityLabel(store.offline.contains(track) ? "Downloaded" : "Download")
+                        .accessibilityLabel(store.offline.contains(track) ? String(localized: "Downloaded", bundle: AppLocalization.bundle) : String(localized: "Download", bundle: AppLocalization.bundle))
+                        .disabled(store.offline.downloading.contains(track.id))
                     }
                 }
             }
@@ -121,7 +95,90 @@ struct NowPlayingView: View {
             .navigationBarTitleDisplayMode(.inline)
         }
     }
-    private func time(_ value: Double) -> String { String(format: "%d:%02d", Int(value) / 60, Int(value) % 60) }
+
+    private var transportControls: some View {
+        VStack(spacing: 16) {
+            HStack(spacing: 32) {
+                Button { store.previous() } label: { Image(systemName: "backward.fill").frame(width: 44, height: 44) }
+                    .accessibilityLabel("Previous track")
+                Button { store.togglePlay() } label: {
+                    Image(systemName: store.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 64)).frame(width: 72, height: 72)
+                }
+                .accessibilityLabel(store.isPlaying ? String(localized: "Pause", bundle: AppLocalization.bundle) : String(localized: "Play", bundle: AppLocalization.bundle))
+                Button { store.next() } label: { Image(systemName: "forward.fill").frame(width: 44, height: 44) }
+                    .accessibilityLabel("Next track")
+            }
+            HStack(spacing: 24) {
+                Button { store.toggleShuffle() } label: {
+                    Image(systemName: "shuffle").frame(width: 44, height: 44)
+                        .background(store.isShuffled ? Color.primary.opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 12))
+                }
+                .accessibilityLabel("Shuffle")
+                .accessibilityValue(store.isShuffled ? String(localized: "On", bundle: AppLocalization.bundle) : String(localized: "Off", bundle: AppLocalization.bundle))
+                .accessibilityAddTraits(store.isShuffled ? .isSelected : [])
+                Button { store.skip(-15) } label: { Image(systemName: "gobackward.15").frame(width: 44, height: 44) }
+                    .accessibilityLabel("Back 15 seconds")
+                Button { store.skip(15) } label: { Image(systemName: "goforward.15").frame(width: 44, height: 44) }
+                    .accessibilityLabel("Forward 15 seconds")
+                Button { store.cycleRepeat() } label: {
+                    Image(systemName: store.repeatMode == .one ? "repeat.1" : "repeat").frame(width: 44, height: 44)
+                        .background(store.repeatMode != .off ? Color.primary.opacity(0.18) : .clear, in: RoundedRectangle(cornerRadius: 12))
+                }
+                .accessibilityLabel("Repeat")
+                .accessibilityValue(store.repeatMode.accessibilityValue)
+                .accessibilityAddTraits(store.repeatMode != .off ? .isSelected : [])
+            }
+        }
+        .font(.title2).buttonStyle(.plain)
+    }
+}
+
+// Progress ticks invalidate only the slider and time labels.
+private struct PlaybackPositionView: View {
+    @Environment(MusicStore.self) private var store
+    @State private var isScrubbing = false
+    @State private var scrubPosition: Double = 0
+    @State private var scrubbingEntryID: UUID?
+
+    var body: some View {
+        VStack(spacing: 7) {
+            Slider(value: Binding(get: { isScrubbing ? scrubPosition : store.progress }, set: { scrubPosition = $0 }),
+                   in: 0...max(store.playbackDuration, 1), onEditingChanged: { editing in
+                if editing {
+                    scrubPosition = store.progress
+                    scrubbingEntryID = store.queue.current?.id
+                    isScrubbing = true
+                } else {
+                    if isScrubbing, scrubbingEntryID == store.queue.current?.id { store.seek(to: scrubPosition) }
+                    isScrubbing = false
+                    scrubbingEntryID = nil
+                }
+            })
+            .disabled(store.playbackDuration <= 0)
+            .accessibilityLabel("Playback position")
+            .accessibilityValue(PlaybackTime.formatted(store.progress))
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: store.seek(to: store.progress + 5)
+                case .decrement: store.seek(to: store.progress - 5)
+                @unknown default: break
+                }
+            }
+            HStack {
+                Text(PlaybackTime.formatted(isScrubbing ? scrubPosition : store.progress))
+                Spacer()
+                Text("-\(PlaybackTime.formatted(max(0, store.playbackDuration - (isScrubbing ? scrubPosition : store.progress))))")
+            }
+            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: 460)
+        .onChange(of: store.queue.current?.id) { _, _ in
+            isScrubbing = false
+            scrubbingEntryID = nil
+        }
+    }
+
 }
 
 struct RoutePickerView: UIViewRepresentable {

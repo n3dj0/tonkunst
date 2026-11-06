@@ -10,13 +10,13 @@ Tonkunst is a native SwiftUI iPhone/iPad music client for a Jellyfin collection.
 - Connection status that changes from Jellyfin-connected to offline-only
 - Native `AVPlayer` playback, lock-screen controls, background audio, transport controls, shuffle, repeat, seek, and AirPlay
 - Jellyfin universal AAC/M4A playback URLs so files such as MP3, AAC, FLAC, M4A, and Opus can be served in an iOS-compatible form
-- Download/remove music for offline playback, stored in Files under **On My iPhone → Tonkunst → Artist → Album**, with an `iphone.gen3` availability indicator. Existing downloads are moved there when the app starts.
+- Download/remove music for offline playback, stored in Files under **On My iPhone → Tonkunst → Accounts → account folder → Artist → Album**, with an `iphone.gen3` availability indicator. Each server/account has its own files and download index.
 - Light and dark mode through SwiftUI’s system materials and semantic colors
 
 ## Run
 
-1. Open `Tonkunst.xcodeproj` in Xcode 16 or later.
-2. Choose an iOS 17+ simulator or a signed physical iPhone/iPad and run.
+1. Open `Tonkunst.xcodeproj` in Xcode 26 or later (Swift 6.2+).
+2. Choose an iOS 26+ simulator or a signed physical iPhone/iPad and run.
 3. Open the account avatar and enter the LAN host of your Jellyfin server, for example `192.168.1.25`, select HTTP and port `8096`, then enter your Jellyfin account credentials.
 
 At launch, Tonkunst shows its opening interface while the saved account and offline files restore in the background. Downloaded songs are available while the server refresh completes. Lock-screen media controls initialize when playback first starts. To check cold-start behavior, terminate the app and launch it from the Home Screen without the debugger, both with and without network access and with a populated offline library.
@@ -29,6 +29,10 @@ Manual library refreshes have a 10-second cooldown after each attempt, including
 
 You can copy downloaded audio from Files. Keep the files in their Tonkunst folders if you want the app to continue playing them offline.
 
+Existing downloads migrate automatically when their saved metadata identifies their Jellyfin server and user. Migration copies audio before saving the new index, then removes the old copy after that save succeeds. Downloads whose account cannot be established remain in Files and are counted in Account & Settings; they are not assigned to the current account. Signing out hides that account's downloads in the app and preserves its files for the next sign-in. Download indexes use relative paths so iOS sandbox changes do not invalidate them.
+
+Queue and offline-file persistence run in serial actors away from the UI thread. Queue saves are ordered and flushed when the app enters the background. A corrupt Queue archive is preserved as a backup and a fresh Queue can be saved. Filesystem and manifest errors are surfaced instead of reporting a successful download or deletion.
+
 ## Queue and playback
 
 Long-press a song in any song list and choose **Add to Queue**. The Queue holds up to 1,000 upcoming occurrences and the latest 100 played occurrences. Duplicate songs are supported. Tap a song in the library to play it immediately while retaining upcoming songs. Use the **Play** icon in the Queue toolbar, to the left of the connection and account controls, to start or resume the Queue.
@@ -38,6 +42,12 @@ The Queue opens centered on the bold current song. Upcoming songs are above it, 
 Shuffle randomizes upcoming songs when enabled; turning it off retains that visible order. Previous returns to a played song (or restarts after four seconds), placing the current song back in upcoming; at the upcoming limit it restarts instead. Repeat cycles Off → All songs → One song. All replays retained history and the current song after upcoming songs finish. One repeats on completion; Next still advances. Unavailable songs remain queued and are skipped until playable.
 
 Run `Tests/run-playback-tests.sh` for Queue limits, duplicates, history, ordering, repeat, and removal regression tests.
+
+Run `swift test` on macOS 15+ with Swift 6.2+ for the Swift Testing suite covering account isolation and switching, credential-safe and retryable migration, sandbox path changes, corrupt Queue recovery, filesystem failures, API errors/cancellation, playback commands and interruptions, offline observation, and German localization/plurals. Playback tests use injected drivers and audio-session clients. `Package.swift` builds these core services for tests; the iOS app remains in the Xcode project and uses Swift 6 language mode with complete concurrency checking. See [CODE_REVIEW.md](CODE_REVIEW.md) for the implementation status and device validation still needed.
+
+Now Playing scrolls to accommodate small screens and large text. Dragging its position slider previews the time and submits one seek when released; VoiceOver can adjust it in five-second steps. Playback pauses when headphones disconnect and follows the system's interruption/resume permission without overriding a manual pause. Interface and error resources are provided in English and German.
+
+The app declares its app-only UserDefaults use in `PrivacyInfo.xcprivacy`, retains the local-network ATS exception for LAN servers, and uses a random installation identifier for Jellyfin's client identifier. It does not read the device's vendor identifier or include advertising/tracking SDKs.
 
 ## Ambient backgrounds
 

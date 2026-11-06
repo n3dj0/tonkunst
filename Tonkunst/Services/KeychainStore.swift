@@ -13,9 +13,9 @@ enum KeychainStore {
         var errorDescription: String? {
             switch self {
             case .unavailable(let status):
-                "Tonkunst could not access your saved accounts (Keychain error \(status))."
+                String(localized: "Tonkunst could not access your saved accounts (Keychain error \(status)).", bundle: AppLocalization.bundle)
             case .invalidData:
-                "Tonkunst could not read your saved accounts from the Keychain."
+                String(localized: "Tonkunst could not read your saved accounts from the Keychain.", bundle: AppLocalization.bundle)
             }
         }
     }
@@ -26,7 +26,7 @@ enum KeychainStore {
          kSecAttrAccount as String: account]
     }
 
-    static func save(_ profile: ServerProfile) throws -> [ServerProfile] {
+    static func save(_ profile: ServerProfile, activate: Bool = true) throws -> [ServerProfile] {
         var profiles = try loadProfiles()
         if let index = profiles.firstIndex(where: { $0.id == profile.id }) {
             profiles[index] = profile
@@ -34,7 +34,7 @@ enum KeychainStore {
             profiles.append(profile)
         }
         try write(profiles)
-        UserDefaults.standard.set(profile.id, forKey: activeAccountKey)
+        if activate { UserDefaults.standard.set(profile.id, forKey: activeAccountKey) }
         return profiles
     }
 
@@ -105,5 +105,17 @@ enum KeychainStore {
         } else if status != errSecSuccess {
             throw StorageError.unavailable(status)
         }
+    }
+}
+
+actor AccountRepository {
+    func load() -> Result<(profiles: [ServerProfile], active: ServerProfile?), Error> {
+        Result { try KeychainStore.load() }
+    }
+    func save(_ profile: ServerProfile) throws -> [ServerProfile] {
+        try KeychainStore.save(profile, activate: false)
+    }
+    func remove(_ profile: ServerProfile) throws -> [ServerProfile] {
+        try KeychainStore.remove(profile)
     }
 }

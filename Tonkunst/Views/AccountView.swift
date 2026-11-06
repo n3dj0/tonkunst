@@ -18,7 +18,7 @@ struct AccountView: View {
         }
     }
 
-    @EnvironmentObject private var store: MusicStore
+    @Environment(MusicStore.self) private var store
     @Environment(\.dismiss) private var dismiss
 
     @State private var protocolSelection: JellyfinProtocol = .http
@@ -234,7 +234,7 @@ struct AccountView: View {
                 .tint(Color.primary)
                 .foregroundStyle(Color.primary)
                 .fixedSize()
-                .accessibilityLabel(willDisconnect ? "Disconnect from Jellyfin" : "Connect to Jellyfin")
+                .accessibilityLabel(willDisconnect ? String(localized: "Disconnect from Jellyfin", bundle: AppLocalization.bundle) : String(localized: "Connect to Jellyfin", bundle: AppLocalization.bundle))
                 .accessibilityValue(store.listenStatus)
             }
         }
@@ -292,7 +292,12 @@ struct AccountView: View {
                 .font(.footnote)
                 .foregroundStyle(Color.secondary)
 
-                Text("Downloads appear in Files under On My iPhone → Tonkunst, arranged by artist and album. Remove individual downloads from the Offline tab.")
+                if store.offline.unassignedDownloadCount > 0 {
+                    Text("\(store.offline.unassignedDownloadCount) older downloads remain in Files because their account could not be identified.")
+                        .font(.footnote)
+                }
+
+                Text("Downloads appear in Files under On My iPhone → Tonkunst → Accounts, arranged by account, artist and album. Remove individual downloads from the Offline tab.")
                     .font(.footnote)
                     .foregroundStyle(Color.secondary)
             }
@@ -334,6 +339,6 @@ private struct LibraryRefreshProgressBar: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Library refresh progress")
-        .accessibilityValue(isRefreshing ? "Refreshing" : "Idle")
+        .accessibilityValue(isRefreshing ? String(localized: "Refreshing", bundle: AppLocalization.bundle) : String(localized: "Idle", bundle: AppLocalization.bundle))
     }
 }

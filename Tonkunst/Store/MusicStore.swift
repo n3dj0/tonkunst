@@ -1,6 +1,5 @@
-import AVFoundation
-import MediaPlayer
 import Network
+import Observation
 import SwiftUI
 import UIKit
 
@@ -8,90 +7,146 @@ struct ConnectionModeNotice: Identifiable, Equatable {
     let id = UUID()
     let isOnline: Bool
 
-    var title: String { isOnline ? "Online Mode" : "Offline Mode" }
+    var title: String { isOnline ? String(localized: "Online Mode", bundle: AppLocalization.bundle) : String(localized: "Offline Mode", bundle: AppLocalization.bundle) }
     var systemImage: String { isOnline ? "wifi" : "wifi.slash" }
 }
 
 @MainActor
-final class MusicStore: NSObject, ObservableObject {
-    @Published var profile: ServerProfile?
-    @Published private(set) var savedProfiles: [ServerProfile] = []
-    @Published private var cachedTracks: [MediaTrack] = []
-    @Published var currentTrack: MediaTrack?
-    @Published var isPlaying = false
-    @Published var connectionAvailable = false
-    @Published private(set) var connectionEnabled = true
-    @Published private(set) var isConnecting = false
-    @Published private(set) var connectionModeNotice: ConnectionModeNotice?
-    @Published var isLoading = false
-    @Published private var manualRefreshAvailableDates: [String: Date] = [:]
-    @Published private var libraryRefreshDates = UserDefaults.standard.dictionary(forKey: "tonkunst.libraryRefreshDates") as? [String: Date] ?? [:]
-    @Published private(set) var isRestoringSession = true
-    @Published var errorMessage: String?
-    @Published private(set) var repeatMode: RepeatMode = .off
-    @Published private(set) var isShuffled = false
-    @Published var progress: Double = 0
-    @Published var playbackDuration: Double = 0
-    let offline = OfflineLibrary()
-    @Published private(set) var queue = PlaybackQueue() {
+@Observable
+final class MusicStore {
+    private(set) var profile: ServerProfile?
+    private(set) var savedProfiles: [ServerProfile] = []
+    private var cachedTracks: [MediaTrack] = []
+    var currentTrack: MediaTrack? { queue.current?.track }
+    var isPlaying: Bool { playback.isPlaying }
+    private(set) var connectionAvailable = false
+    private(set) var connectionEnabled = true
+    private(set) var isConnecting = false
+    private(set) var connectionModeNotice: ConnectionModeNotice?
+    private(set) var isLoading = false
+    private var manualRefreshAvailableDates: [String: Date] = [:]
+    private var libraryRefreshDates = UserDefaults.standard.dictionary(forKey: "tonkunst.libraryRefreshDates") as? [String: Date] ?? [:]
+    private(set) var isRestoringSession = true
+    var errorMessage: String?
+    private(set) var repeatMode: RepeatMode = .off
+    private(set) var isShuffled = false
+    var progress: Double { playback.progress }
+    var playbackDuration: Double { playback.hasDriver ? playback.duration : (currentTrack?.duration ?? 0) }
+    let offline: OfflineLibrary
+    private let playback: PlaybackController
+    private let mediaControls: SystemMediaControls
+    private(set) var queue = PlaybackQueue() {
         didSet {
             guard !isRestoringQueue, let queueAccount else { return }
-            do { try queueStorage.save(queue, account: queueAccount) }
-            catch { errorMessage = "The Queue could not be saved: \(error.localizedDescription)" }
+            let snapshot = queue
+            let previous = queueSaveTask
+            let repository = queueRepository
+            queueSaveTask = Task { [weak self] in
+                await previous?.value
+                do { try await repository.save(snapshot, account: queueAccount) }
+                catch { self?.errorMessage = String(localized: "The Queue could not be saved: \(error.localizedDescription)", bundle: AppLocalization.bundle) }
+            }
         }
     }
-    private let queueStorage = QueueStorage()
+    private let queueRepository: QueueRepository
+    private var queueSaveTask: Task<Void, Never>?
     private var queueAccount: String?
     private var isRestoringQueue = false
+    private let accounts = AccountRepository()
 
-    private func restoreQueue() {
-        isRestoringQueue = true
-        defer { isRestoringQueue = false }
-        queueAccount = profile?.id ?? "local"
-        do { queue = try queueStorage.load(account: queueAccount!, token: profile?.accessToken) }
-        catch {
-            queue = PlaybackQueue()
-            errorMessage = "The saved Queue could not be read: \(error.localizedDescription)"
+    init(api: JellyfinAPI? = nil, offline: OfflineLibrary? = nil,
+         queueRepository: QueueRepository = QueueRepository(), playback: PlaybackController? = nil) {
+        let defaults = UserDefaults.standard
+        let deviceID = defaults.string(forKey: "tonkunst.deviceID") ?? UUID().uuidString
+        defaults.set(deviceID, forKey: "tonkunst.deviceID")
+        self.api = api ?? JellyfinAPI(deviceID: deviceID)
+        self.offline = offline ?? OfflineLibrary()
+        self.queueRepository = queueRepository
+        self.playback = playback ?? PlaybackController(audioSession: AudioSessionService(), factory: { AVPlayerDriver(url: $0) })
+        mediaControls = SystemMediaControls()
+        self.playback.onEvent = { [weak self] event in
+            switch event {
+            case .finished: self?.advancePlayback(afterFinishing: true)
+            case .failed(let error):
+                guard let self, let track = self.currentTrack else { return }
+                self.handlePlaybackFailure(error, trackID: track.id)
+            case .audioSessionFailed(let error):
+                self?.errorMessage = String(localized: "Audio could not start: \(error.localizedDescription)", bundle: AppLocalization.bundle)
+            }
         }
-        currentTrack = queue.current?.track
-        playbackDuration = currentTrack?.duration ?? 0
-        progress = 0
-        isPlaying = false
+        self.playback.onSnapshot = { [weak mediaControls] in mediaControls?.update($0) }
+        mediaControls.onAction = { [weak self] action in
+            guard let self else { return }
+            switch action {
+            case .play: self.resume()
+            case .pause: self.pause()
+            case .next: self.next()
+            case .previous: self.previous()
+            case .interruptionBegan:
+                self.cancelPlaybackRecovery()
+                self.playback.interruptionBegan()
+            case .interruptionEnded(let resume): self.playback.interruptionEnded(shouldResume: resume)
+            }
+        }
     }
 
+    private func prepareAccountContent() {
+        isRestoringSession = true
+        isRestoringQueue = true
+        queueAccount = nil
+        queue = PlaybackQueue()
+        isRestoringQueue = false
+        offline.selectAccount(profile)
+    }
+
+    private func restoreAccountContent() async {
+        guard !Task.isCancelled else { return }
+        let generation = connectionGeneration
+        defer { if connectionGeneration == generation { isRestoringSession = false } }
+        do { try await offline.restore() }
+        catch { if connectionGeneration == generation { errorMessage = error.localizedDescription } }
+        await queueSaveTask?.value
+        guard connectionGeneration == generation else { return }
+        let account = profile?.id ?? "local"
+        do {
+            let restored = try await queueRepository.load(account: account, profile: profile)
+            guard connectionGeneration == generation else { return }
+            isRestoringQueue = true
+            queue = restored.queue
+            isRestoringQueue = false
+            queueAccount = account
+            if restored.recoveredArchive != nil {
+                errorMessage = String(localized: "The saved Queue was damaged. A backup was preserved and a new Queue is ready.", bundle: AppLocalization.bundle)
+            }
+        } catch {
+            errorMessage = String(localized: "The saved Queue could not be read: \(error.localizedDescription)", bundle: AppLocalization.bundle)
+        }
+    }
+
+    func flushPersistence() async { await queueSaveTask?.value }
+
     typealias RepeatMode = PlaybackRepeatMode
-    private let api = JellyfinAPI()
-    private let audioSessionQueue = DispatchQueue(label: "com.tonkunst.audio-session", qos: .userInitiated)
-    private var player: AVPlayer?
-    private var timeObserver: Any?
-    private var itemStatusObservation: NSKeyValueObservation?
-    private var timeControlStatusObservation: NSKeyValueObservation?
-    private var didFinishObserver: NSObjectProtocol?
-    private var didFailToFinishObserver: NSObjectProtocol?
+    private let api: JellyfinAPI
     private let pathMonitor = NWPathMonitor()
     private let pathMonitorQueue = DispatchQueue(label: "com.tonkunst.network-path")
     private var isMonitoringNetwork = false
     private var serverHealthTask: Task<Void, Never>?
     private var connectionNoticeTask: Task<Void, Never>?
+    private var connectionTask: Task<Void, Never>?
+    private var playbackRecoveryTask: Task<Void, Never>?
     private var isUsingFallbackStream = false
     private var canUseFallbackStream = false
-    private var hasFinishedPlayback = false
     private var connectionGeneration = 0
     private var refreshGeneration: Int?
     private static let manualRefreshCooldown: TimeInterval = 10
     private static let connectionEnabledKey = "tonkunst.connectionEnabled"
 
     private var didStart = false
-    private var remoteControlsConfigured = false
 
     func start() async {
         guard !didStart else { return }
         didStart = true
-        async let offlineRestoration: Void = offline.restore()
-        let sessionResult = await Task.detached(priority: .userInitiated) {
-            try KeychainStore.load()
-        }.result
-        await offlineRestoration
+        let sessionResult = await accounts.load()
         switch sessionResult {
         case .success(let session):
             savedProfiles = session.profiles
@@ -100,28 +155,31 @@ final class MusicStore: NSObject, ObservableObject {
         case .failure(let error):
             errorMessage = error.localizedDescription
         }
-        restoreQueue()
-        isRestoringSession = false
+        prepareAccountContent()
+        await restoreAccountContent()
         if profile != nil && connectionEnabled {
             await refresh()
             startConnectionMonitoring()
         }
     }
 
-    deinit {
+    isolated deinit {
         pathMonitor.cancel()
         serverHealthTask?.cancel()
         connectionNoticeTask?.cancel()
-        if let timeObserver { player?.removeTimeObserver(timeObserver) }
-        if let didFinishObserver { NotificationCenter.default.removeObserver(didFinishObserver) }
-        if let didFailToFinishObserver { NotificationCenter.default.removeObserver(didFailToFinishObserver) }
+        connectionTask?.cancel()
+        playbackRecoveryTask?.cancel()
     }
 
     // Keep metadata for reconnection, but only expose playable songs to browsing.
     var tracks: [MediaTrack] { connectionAvailable ? cachedTracks : offlineTracks }
 
     func canPlay(_ track: MediaTrack) -> Bool {
-        offline.contains(track) || (connectionAvailable && track.streamURL != nil)
+        track.belongs(to: profile) && (offline.contains(track) || (connectionAvailable && track.streamURL != nil))
+    }
+
+    private func canStartPlayback(_ track: MediaTrack) -> Bool {
+        canPlay(track)
     }
 
     var offlineTracks: [MediaTrack] {
@@ -129,32 +187,43 @@ final class MusicStore: NSObject, ObservableObject {
         return cachedTracks.filter { offline.contains($0) } + offline.tracks.filter { !visibleIDs.contains($0.id) }
     }
     var listenStatus: String {
-        if profile != nil && !connectionEnabled { return "Disconnected from Jellyfin" }
-        if isConnecting { return "Connecting to Jellyfin…" }
-        return connectionAvailable ? "Connected to Jellyfin" : (offlineTracks.isEmpty ? "Jellyfin unavailable" : "Offline listening")
+        if profile != nil && !connectionEnabled { return String(localized: "Disconnected from Jellyfin", bundle: AppLocalization.bundle) }
+        if isConnecting { return String(localized: "Connecting to Jellyfin…", bundle: AppLocalization.bundle) }
+        return connectionAvailable ? String(localized: "Connected to Jellyfin", bundle: AppLocalization.bundle) : (offlineTracks.isEmpty ? String(localized: "Jellyfin unavailable", bundle: AppLocalization.bundle) : String(localized: "Offline listening", bundle: AppLocalization.bundle))
     }
 
     func signIn(server: String, username: String, password: String) async {
+        guard !isLoading else { return }
         isLoading = true; errorMessage = nil
+        var generation = connectionGeneration
+        defer { if connectionGeneration == generation { isLoading = false } }
         do {
             let authenticatedProfile = try await api.authenticate(server: server, username: username, password: password)
-            savedProfiles = try KeychainStore.save(authenticatedProfile)
+            try Task.checkCancellation()
+            guard connectionGeneration == generation else { return }
+            savedProfiles = try await accounts.save(authenticatedProfile)
+            guard connectionGeneration == generation else { return }
+            KeychainStore.activate(authenticatedProfile)
             clearConnectionModeNotice()
             connectionGeneration += 1
+            generation = connectionGeneration
+            connectionTask?.cancel()
+            serverHealthTask?.cancel()
             connectionEnabled = true
             UserDefaults.standard.set(true, forKey: Self.connectionEnabledKey)
             stop()
             if profile?.id != authenticatedProfile.id { cachedTracks = [] }
             profile = authenticatedProfile
-            restoreQueue()
+            prepareAccountContent()
+            await restoreAccountContent()
             await refresh()
+            guard !Task.isCancelled, connectionGeneration == generation, profile == authenticatedProfile, connectionEnabled else { return }
             startConnectionMonitoring()
         }
+        catch is CancellationError { }
         catch {
-            print("Jellyfin authentication failed: \(error.localizedDescription)")
-            errorMessage = error.localizedDescription
+            if connectionGeneration == generation { errorMessage = error.localizedDescription }
         }
-        isLoading = false
     }
 
     var lastLibraryRefresh: Date? {
@@ -177,7 +246,7 @@ final class MusicStore: NSObject, ObservableObject {
         }
         refreshGeneration = generation
         isLoading = true
-        errorMessage = nil
+        if isUserInitiated { errorMessage = nil }
         defer {
             if isUserInitiated {
                 manualRefreshAvailableDates[profile.id] = Date().addingTimeInterval(Self.manualRefreshCooldown)
@@ -188,20 +257,26 @@ final class MusicStore: NSObject, ObservableObject {
         do {
             let fetchedTracks = try await api.fetchSongs(profile: profile)
             guard self.profile == profile, connectionEnabled, connectionGeneration == generation else { return }
-            offline.reconcile(with: fetchedTracks)
-            cachedTracks = fetchedTracks.map { item in
-                var item = item
-                item.isDownloaded = offline.contains(item)
-                return item
-            }
+            do { try await offline.reconcile(with: fetchedTracks) }
+            catch { errorMessage = String(localized: "Offline metadata could not be saved: \(error.localizedDescription)", bundle: AppLocalization.bundle) }
+            guard self.profile == profile, connectionEnabled, connectionGeneration == generation else { return }
+            cachedTracks = fetchedTracks
             connectionAvailable = true
             guard self.profile == profile, connectionEnabled, connectionGeneration == generation else { return }
             libraryRefreshDates[profile.id] = Date()
             UserDefaults.standard.set(libraryRefreshDates, forKey: "tonkunst.libraryRefreshDates")
+        } catch is CancellationError {
+            return
         } catch {
             guard self.profile == profile, connectionEnabled, connectionGeneration == generation else { return }
             connectionAvailable = false
-            if isUserInitiated { errorMessage = "Jellyfin is unavailable. Downloaded songs are still available offline." }
+            if (error as? JellyfinError) == .sessionExpired {
+                connectionEnabled = false
+                isConnecting = false
+                UserDefaults.standard.set(false, forKey: Self.connectionEnabledKey)
+                serverHealthTask?.cancel()
+            }
+            if isUserInitiated || (error as? JellyfinError) == .sessionExpired { errorMessage = error.localizedDescription }
         }
     }
 
@@ -210,19 +285,23 @@ final class MusicStore: NSObject, ObservableObject {
         clearConnectionModeNotice()
         stop()
         serverHealthTask?.cancel()
+        connectionTask?.cancel()
         connectionGeneration += 1
         connectionEnabled = true
         isConnecting = false
         UserDefaults.standard.set(true, forKey: Self.connectionEnabledKey)
         KeychainStore.activate(savedProfile)
         profile = savedProfile
-        restoreQueue()
+        prepareAccountContent()
         cachedTracks = []
         connectionAvailable = false
         errorMessage = nil
-        Task {
+        let generation = connectionGeneration
+        connectionTask = Task { [weak self] in
+            guard let self else { return }
+            await restoreAccountContent()
             await refresh()
-            guard profile == savedProfile, connectionEnabled else { return }
+            guard !Task.isCancelled, profile == savedProfile, connectionEnabled, connectionGeneration == generation else { return }
             startConnectionMonitoring()
         }
     }
@@ -237,6 +316,7 @@ final class MusicStore: NSObject, ObservableObject {
             isConnecting = false
             UserDefaults.standard.set(false, forKey: Self.connectionEnabledKey)
             serverHealthTask?.cancel()
+            connectionTask?.cancel()
             serverHealthTask = nil
             connectionAvailable = false
             isLoading = false
@@ -250,9 +330,11 @@ final class MusicStore: NSObject, ObservableObject {
             UserDefaults.standard.set(true, forKey: Self.connectionEnabledKey)
             let generation = connectionGeneration
             serverHealthTask?.cancel()
-            Task {
+            connectionTask?.cancel()
+            connectionTask = Task { [weak self] in
+                guard let self else { return }
                 await refresh()
-                guard self.profile == profile, connectionEnabled, connectionGeneration == generation else { return }
+                guard !Task.isCancelled, self.profile == profile, connectionEnabled, connectionGeneration == generation else { return }
                 isConnecting = false
                 showConnectionModeNotice(isOnline: connectionAvailable)
                 startConnectionMonitoring()
@@ -282,10 +364,14 @@ final class MusicStore: NSObject, ObservableObject {
 
     func forgetSavedAccount(_ savedProfile: ServerProfile) {
         guard profile == nil else { return }
-        do {
-            savedProfiles = try KeychainStore.remove(savedProfile)
-        } catch {
-            errorMessage = error.localizedDescription
+        let generation = connectionGeneration
+        connectionTask?.cancel()
+        connectionTask = Task { [weak self, accounts] in
+            do {
+                let profiles = try await accounts.remove(savedProfile)
+                guard !Task.isCancelled, let self, self.connectionGeneration == generation else { return }
+                self.savedProfiles = profiles
+            } catch { self?.errorMessage = error.localizedDescription }
         }
     }
 
@@ -293,57 +379,43 @@ final class MusicStore: NSObject, ObservableObject {
         clearConnectionModeNotice()
         stop()
         serverHealthTask?.cancel()
+        connectionTask?.cancel()
         connectionGeneration += 1
         connectionEnabled = true
         isConnecting = false
         UserDefaults.standard.set(true, forKey: Self.connectionEnabledKey)
         KeychainStore.signOut()
+        isLoading = false
         profile = nil; cachedTracks = []; connectionAvailable = false; errorMessage = nil
-        restoreQueue()
+        prepareAccountContent()
+        connectionTask = Task { [weak self] in await self?.restoreAccountContent() }
     }
 
     func play(_ track: MediaTrack, preservingQueue: Bool = false) {
         let localSource = offline.localURL(for: track)
         guard let source = localSource ?? (connectionAvailable ? track.streamURL : nil) else { return }
-        if currentTrack?.id == track.id, player != nil { togglePlay(); return }
+        guard track.belongs(to: profile) else { return }
+        if currentTrack?.id == track.id, playback.hasDriver { togglePlay(); return }
         if !preservingQueue { queue.start(QueueEntry(track: track)) }
         stopPlayerOnly()
-        currentTrack = track; progress = 0; playbackDuration = track.duration
         isUsingFallbackStream = false
         canUseFallbackStream = localSource == nil
-        configureRemoteControls()
-        startPlayer(source: source, for: track)
+        mediaControls.configure()
+        playback.load(source, track: track)
     }
 
-    func togglePlay() {
-        guard let player else { if let currentTrack { play(currentTrack, preservingQueue: true) }; return }
-        if isPlaying {
-            player.pause()
-            isPlaying = false
-            updateNowPlaying()
-        } else {
-            if hasFinishedPlayback { seek(to: 0) }
-            activateAudioSession { [weak self] result in
-                guard let self else { return }
-                switch result {
-                case .success:
-                    self.player?.play()
-                    self.isPlaying = true
-                    self.updateNowPlaying()
-                case .failure(let error):
-                    self.isPlaying = false
-                    self.errorMessage = "Audio could not start: \(error.localizedDescription)"
-                }
-            }
-        }
+    func togglePlay() { if isPlaying { pause() } else { resume() } }
+    func pause() {
+        cancelPlaybackRecovery()
+        playback.pause()
     }
-    func stop() { stopPlayerOnly(); currentTrack = nil; isPlaying = false; updateNowPlaying(); deactivateAudioSession() }
-    func seek(to seconds: Double) {
-        hasFinishedPlayback = false
-        player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600))
-        progress = seconds
+    func resume() {
+        if playback.hasDriver { playback.resume() }
+        else if let currentTrack { play(currentTrack, preservingQueue: true) }
     }
-    func skip(_ delta: TimeInterval) { seek(to: max(0, min(playbackDuration, progress + delta))) }
+    func stop() { stopPlayerOnly() }
+    func seek(to seconds: Double) { playback.seek(to: seconds) }
+    func skip(_ delta: TimeInterval) { seek(to: progress + delta) }
 
     func next() {
         advancePlayback(afterFinishing: false)
@@ -351,7 +423,7 @@ final class MusicStore: NSObject, ObservableObject {
 
     func startQueue() {
         guard !isPlaying else { return }
-        if let entry = queue.current, canPlay(entry.track) {
+        if let entry = queue.current, canStartPlayback(entry.track) {
             play(entry.track, preservingQueue: true)
         } else {
             next()
@@ -359,13 +431,7 @@ final class MusicStore: NSObject, ObservableObject {
     }
 
     private func advancePlayback(afterFinishing: Bool) {
-        guard let entry = queue.advance(repeatMode: repeatMode, afterFinishing: afterFinishing, canPlay: canPlay) else {
-            if afterFinishing {
-                player?.pause()
-                hasFinishedPlayback = true
-                isPlaying = false
-                updateNowPlaying()
-            }
+        guard let entry = queue.advance(repeatMode: repeatMode, afterFinishing: afterFinishing, canPlay: canStartPlayback) else {
             return
         }
         playQueueTrack(entry.track)
@@ -373,27 +439,27 @@ final class MusicStore: NSObject, ObservableObject {
 
     private func playQueueTrack(_ track: MediaTrack) {
         stopPlayerOnly()
-        currentTrack = nil
         play(track, preservingQueue: true)
     }
 
     func previous() {
         if progress > 4 { seek(to: 0); return }
-        guard let entry = queue.previous(canPlay: canPlay) else { seek(to: 0); return }
+        guard let entry = queue.previous(canPlay: canStartPlayback) else { seek(to: 0); return }
         playQueueTrack(entry.track)
     }
 
     func addToQueue(_ track: MediaTrack) {
-        if !queue.add(track) { errorMessage = "The Queue can hold up to 1,000 upcoming songs." }
+        guard track.belongs(to: profile), !isRestoringSession else { return }
+        if !queue.add(track) { errorMessage = String(localized: "The Queue can hold up to 1,000 upcoming songs.", bundle: AppLocalization.bundle) }
     }
 
     func playFromQueue(_ id: UUID) {
-        guard let entry = queue.select(id, canPlay: canPlay) else { return }
+        guard let entry = queue.select(id, canPlay: canStartPlayback) else { return }
         playQueueTrack(entry.track)
     }
 
     func queuePlayNext(_ id: UUID) {
-        if !queue.playNext(id) { errorMessage = "The Queue can hold up to 1,000 upcoming songs." }
+        if !queue.playNext(id) { errorMessage = String(localized: "The Queue can hold up to 1,000 upcoming songs.", bundle: AppLocalization.bundle) }
     }
 
     func removeFromQueue(_ id: UUID) {
@@ -401,10 +467,7 @@ final class MusicStore: NSObject, ObservableObject {
         queue.remove(id)
         if isCurrent {
             stopPlayerOnly()
-            currentTrack = nil
-            isPlaying = false
             advancePlayback(afterFinishing: false)
-            if currentTrack == nil { updateNowPlaying(); deactivateAudioSession() }
         }
     }
 
@@ -418,120 +481,63 @@ final class MusicStore: NSObject, ObservableObject {
     func cycleRepeat() { repeatMode = repeatMode.next }
 
     func toggleDownload(_ track: MediaTrack) async {
+        guard !offline.downloading.contains(track.id) else { return }
         if offline.contains(track) {
-            offline.remove(track)
-            cachedTracks = cachedTracks.map { var value = $0; value.isDownloaded = offline.contains(value); return value }
+            do { try await offline.remove(track) }
+            catch { errorMessage = String(localized: "Download could not be removed: \(error.localizedDescription)", bundle: AppLocalization.bundle) }
         }
         else {
             guard connectionEnabled && connectionAvailable else {
-                errorMessage = "Connect to Jellyfin to download songs."
+                errorMessage = String(localized: "Connect to Jellyfin to download songs.", bundle: AppLocalization.bundle)
                 return
             }
-            do { try await offline.download(track); cachedTracks = cachedTracks.map { var value = $0; value.isDownloaded = offline.contains(value); return value } }
-            catch { errorMessage = "Download failed: \(error.localizedDescription)" }
+            do { try await offline.download(track) }
+            catch is CancellationError { }
+            catch let error as URLError where error.code == .cancelled { }
+            catch { errorMessage = String(localized: "Download failed: \(error.localizedDescription)", bundle: AppLocalization.bundle) }
         }
-    }
-
-    private func startPlayer(source: URL, for track: MediaTrack) {
-        hasFinishedPlayback = false
-        let player = AVPlayer(url: source)
-        self.player = player
-        observePlayer(player, trackID: track.id)
-        activateAudioSession { [weak self, weak player] result in
-            guard let self, let player, self.player === player else { return }
-            switch result {
-            case .success:
-                player.play()
-                self.isPlaying = true
-                self.updateNowPlaying()
-            case .failure(let error):
-                self.isPlaying = false
-                self.errorMessage = "Audio could not start: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    private func observePlayer(_ player: AVPlayer, trackID: String) {
-        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] time in
-            Task { @MainActor in self?.progress = time.seconds.isFinite ? time.seconds : 0; self?.updateNowPlaying() }
-        }
-        itemStatusObservation = player.currentItem?.observe(\.status, options: [.initial, .new]) { [weak self, weak player] item, _ in
-            Task { @MainActor in
-                guard let self, let player, self.player === player else { return }
-                self.handleItemStatus(item.status, error: item.error, trackID: trackID)
-            }
-        }
-        timeControlStatusObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self, weak player] observedPlayer, _ in
-            Task { @MainActor in
-                guard let self, let player, self.player === player else { return }
-                self.isPlaying = observedPlayer.timeControlStatus != .paused
-            }
-        }
-        didFinishObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: .main) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, self.player === player else { return }
-                self.advancePlayback(afterFinishing: true)
-            }
-        }
-        didFailToFinishObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemFailedToPlayToEndTime, object: player.currentItem, queue: .main) { [weak self] notification in
-            let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
-            Task { @MainActor in
-                guard let self, self.player === player else { return }
-                self.handlePlaybackFailure(error, trackID: trackID)
-            }
-        }
-    }
-
-    private func handleItemStatus(_ status: AVPlayerItem.Status, error: Error?, trackID: String) {
-        if status == .failed { handlePlaybackFailure(error, trackID: trackID) }
     }
 
     private func handlePlaybackFailure(_ error: Error?, trackID: String) {
-        guard currentTrack?.id == trackID else { return }
-        isPlaying = false
-        let failedTrack = currentTrack!
+        guard let failedTrack = currentTrack, failedTrack.id == trackID else { return }
         let wasStreaming = canUseFallbackStream
         let wasFallback = isUsingFallbackStream
         let generation = connectionGeneration
         stopPlayerOnly() // Detach both failure observers before handling this failure.
-        updateNowPlaying()
         guard wasStreaming, let profile else {
-            errorMessage = "This download could not be played. Remove it and download the song again."
+            errorMessage = String(localized: "This download could not be played. Remove it and download the song again.", bundle: AppLocalization.bundle)
             return
         }
-        Task {
+        playbackRecoveryTask = Task { [weak self] in
+            guard let self else { return }
             do {
                 try await api.ping(profile: profile)
-                guard connectionGeneration == generation, currentTrack?.id == trackID, player == nil else { return }
+                guard !Task.isCancelled, connectionGeneration == generation, currentTrack?.id == trackID, !playback.hasDriver else { return }
                 guard connectionEnabled else { return }
                 connectionAvailable = true
                 if !wasFallback, let fallbackURL = failedTrack.fallbackStreamURL {
                     isUsingFallbackStream = true
-                    startPlayer(source: fallbackURL, for: failedTrack)
+                    playback.load(fallbackURL, track: failedTrack)
                 } else {
-                    errorMessage = "Jellyfin could not play this song. Try another song or download it again later."
+                    errorMessage = String(localized: "Jellyfin could not play this song. Try another song or download it again later.", bundle: AppLocalization.bundle)
                 }
-            } catch {
-                guard connectionGeneration == generation, currentTrack?.id == trackID, player == nil else { return }
+            } catch is CancellationError { return }
+            catch {
+                guard connectionGeneration == generation, currentTrack?.id == trackID, !playback.hasDriver else { return }
                 connectionAvailable = false
                 // Losing the home server is an expected offline transition.
-                currentTrack = nil
-                updateNowPlaying()
             }
         }
     }
 
     private func stopPlayerOnly() {
-        if let timeObserver { player?.removeTimeObserver(timeObserver) }
-        timeObserver = nil
-        itemStatusObservation = nil
-        timeControlStatusObservation = nil
-        if let didFinishObserver { NotificationCenter.default.removeObserver(didFinishObserver) }
-        if let didFailToFinishObserver { NotificationCenter.default.removeObserver(didFailToFinishObserver) }
-        didFinishObserver = nil
-        didFailToFinishObserver = nil
-        player?.pause()
-        player = nil
+        cancelPlaybackRecovery()
+        playback.stop()
+    }
+
+    private func cancelPlaybackRecovery() {
+        playbackRecoveryTask?.cancel()
+        playbackRecoveryTask = nil
     }
 
     func recheckConnection() {
@@ -560,42 +566,25 @@ final class MusicStore: NSObject, ObservableObject {
         serverHealthTask?.cancel()
         serverHealthTask = Task { [weak self] in
             while !Task.isCancelled {
-                guard let self, let profile = self.profile else { return }
-                do {
-                    try await self.api.ping(profile: profile)
-                    guard !Task.isCancelled, self.profile == profile, self.connectionEnabled, self.connectionGeneration == generation else { return }
-                    self.connectionAvailable = true
-                } catch {
-                    guard !Task.isCancelled, self.profile == profile, self.connectionEnabled, self.connectionGeneration == generation else { return }
-                    self.connectionAvailable = false
-                }
-                try? await Task.sleep(for: .seconds(10))
+                guard await self?.checkServerHealth(generation: generation) == true else { return }
+                // Do not promote weak self across the sleep: the store owns this task.
+                do { try await Task.sleep(for: .seconds(10)) }
+                catch { return }
             }
         }
     }
 
-    private func activateAudioSession(completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
-        audioSessionQueue.async {
-            do {
-                let session = AVAudioSession.sharedInstance()
-                try session.setCategory(.playback, mode: .default)
-                try session.setActive(true)
-                Task { @MainActor in completion(.success(())) }
-            } catch {
-                Task { @MainActor in completion(.failure(error)) }
-            }
-        }
+    private func checkServerHealth(generation: Int) async -> Bool {
+        guard let profile, connectionEnabled, connectionGeneration == generation else { return false }
+        let available: Bool
+        do {
+            try await api.ping(profile: profile)
+            available = true
+        } catch is CancellationError { return false }
+        catch { available = false }
+        guard !Task.isCancelled, self.profile == profile, connectionEnabled, connectionGeneration == generation else { return false }
+        connectionAvailable = available
+        return true
     }
 
-    private func deactivateAudioSession() {
-        audioSessionQueue.async {
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        }
-    }
-    private func configureRemoteControls() {
-        guard !remoteControlsConfigured else { return }
-        remoteControlsConfigured = true
-        let controls = MPRemoteCommandCenter.shared(); controls.playCommand.addTarget { [weak self] _ in Task { @MainActor in self?.togglePlay() }; return .success }; controls.pauseCommand.addTarget { [weak self] _ in Task { @MainActor in self?.togglePlay() }; return .success }; controls.nextTrackCommand.addTarget { [weak self] _ in Task { @MainActor in self?.next() }; return .success }; controls.previousTrackCommand.addTarget { [weak self] _ in Task { @MainActor in self?.previous() }; return .success }
-    }
-    private func updateNowPlaying() { guard let currentTrack else { MPNowPlayingInfoCenter.default().nowPlayingInfo = nil; return }; MPNowPlayingInfoCenter.default().nowPlayingInfo = [MPMediaItemPropertyTitle: currentTrack.title, MPMediaItemPropertyArtist: currentTrack.artist, MPMediaItemPropertyAlbumTitle: currentTrack.album, MPMediaItemPropertyPlaybackDuration: playbackDuration, MPNowPlayingInfoPropertyElapsedPlaybackTime: progress, MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1 : 0] }
 }
