@@ -381,29 +381,27 @@ struct QueueView: View {
                     GeometryReader { geometry in
                         ScrollViewReader { proxy in
                             List {
-                                if store.queue.upcoming.isEmpty {
-                                    ContentUnavailableView("Up Next", systemImage: "text.badge.plus",
-                                        description: Text("Long-press a song in any list and choose Add to Queue. Your upcoming songs will appear here."))
-                                        .frame(maxWidth: .infinity, minHeight: max(0, geometry.size.height / 2 - 40))
-                                        .listRowInsets(EdgeInsets())
-                                        .listRowSeparator(.hidden)
-                                        .listRowBackground(Color.clear)
+                                Section {
+                                    if store.queue.upcoming.isEmpty {
+                                        ContentUnavailableView("Up Next", systemImage: "text.badge.plus",
+                                            description: Text("Long-press a song in any list and choose Add to Queue. Your upcoming songs will appear here."))
+                                            .frame(maxWidth: .infinity, minHeight: max(0, geometry.size.height / 2 - 40))
+                                            .listRowInsets(EdgeInsets())
+                                            .listRowSeparator(.hidden)
+                                            .listRowBackground(Color.clear)
+                                    }
+                                    ForEach(Array(store.queue.upcoming.reversed())) { entry in
+                                        queueRow(entry, state: .upcoming)
+                                    }
+                                    if let entry = store.queue.current {
+                                        queueRow(entry, state: .current)
+                                            .id(entry.id)
+                                    }
+                                    ForEach(store.queue.history) { entry in
+                                        queueRow(entry, state: .played)
+                                    }
                                 }
-                                ForEach(Array(store.queue.upcoming.reversed())) { entry in
-                                    queueRow(entry, state: .upcoming)
-                                        // Shared dividers must also be hidden on the neighboring row.
-                                        .listRowSeparator(store.queue.current != nil && entry.id == store.queue.upcoming.first?.id ? .hidden : .visible,
-                                                          edges: .bottom)
-                                }
-                                if let entry = store.queue.current {
-                                    queueRow(entry, state: .current)
-                                        .id(entry.id)
-                                }
-                                ForEach(store.queue.history) { entry in
-                                    queueRow(entry, state: .played)
-                                        .listRowSeparator(store.queue.current != nil && entry.id == store.queue.history.first?.id ? .hidden : .visible,
-                                                          edges: .top)
-                                }
+                                .listSectionSeparator(.hidden, edges: .all)
                             }
                             .listStyle(.plain)
                             .contentMargins(.top, store.queue.upcoming.isEmpty ? 0 : max(0, geometry.size.height / 2 - 40), for: .scrollContent)
@@ -470,8 +468,9 @@ struct QueueView: View {
         .disabled(!store.canPlay(entry.track))
         .accessibilityHint("Play this song from the beginning")
         .foregroundStyle(state == .played ? .secondary : .primary)
-        .listRowSeparator(state == .current ? .hidden : .visible)
-        .listRowBackground(queueRowBackground(state))
+        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+        .listRowSeparator(.hidden, edges: .all)
+        .listRowBackground(queueRowBackground(entry, state: state))
         .contextMenu {
             Button("Add to Queue", systemImage: "text.badge.plus") { store.addToQueue(entry.track) }
             Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") { store.queuePlayNext(entry.id) }
@@ -484,7 +483,7 @@ struct QueueView: View {
     }
 
     @ViewBuilder
-    private func queueRowBackground(_ state: QueueRowState) -> some View {
+    private func queueRowBackground(_ entry: QueueEntry, state: QueueRowState) -> some View {
         if state == .current {
             VStack(spacing: 0) {
                 currentSongBoundary
@@ -493,7 +492,15 @@ struct QueueView: View {
             }
             .accessibilityHidden(true)
         } else {
-            state == .played ? Color.gray.opacity(0.15) : Color.clear
+            ZStack(alignment: .bottom) {
+                state == .played ? Color.gray.opacity(0.15) : Color.clear
+                // Own the dividers so neither neighbor can add a line against the current song.
+                if state == .played || store.queue.current == nil || entry.id != store.queue.upcoming.first?.id {
+                    Divider()
+                        .padding(.leading, 16 + 48 + 12) // Row inset, artwork and spacing align it with the title.
+                        .padding(.trailing, 16)
+                }
+            }
         }
     }
 
