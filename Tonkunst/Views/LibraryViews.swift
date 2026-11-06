@@ -262,7 +262,7 @@ struct ArtistsView: View {
                                     .overlay {
                                         Text(String(artist.name.prefix(1)))
                                             .font(.title3.weight(.bold))
-                                            .foregroundStyle(.white)
+                                            .foregroundStyle(Color(uiColor: .systemBackground))
                                     }
                                 Text(artist.name)
                                 Spacer()
@@ -565,11 +565,7 @@ struct WelcomeView: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            Image("AppArtwork")
-                .resizable()
-                .scaledToFill()
-                .frame(width: 106, height: 106)
-                .clipShape(Rectangle())
+            Artwork(track: nil, size: 106)
             Text("Your music, beautifully yours.")
                 .font(.title2.weight(.bold))
             Text("Connect Tonkunst to your Jellyfin server and take your collection anywhere.")
@@ -598,5 +594,11 @@ struct ProfileAvatar: View {
         .frame(width: 36, height: 36)
         .clipShape(Circle())
     }
-    private var fallback: some View { Image(systemName: "person.fill").font(.caption).foregroundStyle(.white).frame(maxWidth: .infinity, maxHeight: .infinity).background(.tint, in: Circle()) }
+    private var fallback: some View {
+        Image(systemName: "person.fill")
+            .font(.body.weight(.semibold))
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.primary.opacity(0.12), in: Circle())
+    }
 }

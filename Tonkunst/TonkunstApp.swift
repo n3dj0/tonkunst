@@ -26,8 +26,8 @@ struct TonkunstApp: App {
                 .environmentObject(store)
                 .task { await store.start() }
                 .disabled(store.isRestoringSession)
-                .tint(.white)
-                .accentColor(.white)
+                .tint(.primary)
+                .accentColor(.primary)
         }
     }
 }
