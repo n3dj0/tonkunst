@@ -344,6 +344,7 @@ private struct ArtistTracksView: View {
 struct QueueView: View {
     @EnvironmentObject private var store: MusicStore
     @Environment(\.miniPlayerClearance) private var playerClearance
+    @Environment(\.colorSchemeContrast) private var colorContrast
     @Binding var showAccount: Bool
     @State private var isBrandVisible = true
 
@@ -361,6 +362,14 @@ struct QueueView: View {
                     GeometryReader { geometry in
                         ScrollViewReader { proxy in
                             List {
+                                if store.queue.upcoming.isEmpty {
+                                    ContentUnavailableView("Up Next", systemImage: "text.badge.plus",
+                                        description: Text("Long-press a song in any list and choose Add to Queue. Your upcoming songs will appear here."))
+                                        .frame(maxWidth: .infinity, minHeight: max(0, geometry.size.height / 2 - 40))
+                                        .listRowInsets(EdgeInsets())
+                                        .listRowSeparator(.hidden)
+                                        .listRowBackground(Color.clear)
+                                }
                                 ForEach(Array(store.queue.upcoming.reversed())) { entry in
                                     queueRow(entry, state: "Upcoming")
                                 }
@@ -373,7 +382,7 @@ struct QueueView: View {
                                 }
                             }
                             .listStyle(.plain)
-                            .contentMargins(.top, max(0, geometry.size.height / 2 - 40), for: .scrollContent)
+                            .contentMargins(.top, store.queue.upcoming.isEmpty ? 0 : max(0, geometry.size.height / 2 - 40), for: .scrollContent)
                             .contentMargins(.bottom, max(playerClearance, geometry.size.height / 2 - 40), for: .scrollContent)
                             .tonkunstBrandVisibility($isBrandVisible)
                             .onAppear {
@@ -381,6 +390,11 @@ struct QueueView: View {
                             }
                             .onChange(of: store.queue.current?.id) { _, id in
                                 if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
+                            }
+                            .onChange(of: store.queue.upcoming.isEmpty) { _, _ in
+                                if let id = store.queue.current?.id {
+                                    withAnimation { proxy.scrollTo(id, anchor: .center) }
+                                }
                             }
                         }
                     }
@@ -432,7 +446,8 @@ struct QueueView: View {
         .disabled(!store.canPlay(entry.track))
         .accessibilityHint("Play this song from the beginning")
         .foregroundStyle(state == "Played" ? .secondary : .primary)
-        .listRowBackground(state == "Played" ? Color.gray.opacity(0.15) : Color.clear)
+        .listRowSeparator(state == "Now Playing" ? .hidden : .visible)
+        .listRowBackground(queueRowBackground(state))
         .contextMenu {
             Button("Add to Queue", systemImage: "text.badge.plus") { store.addToQueue(entry.track) }
             Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") { store.queuePlayNext(entry.id) }
@@ -442,6 +457,29 @@ struct QueueView: View {
                 .disabled(!store.queue.canMove(entry.id, up: false))
             Button("Delete from Queue", systemImage: "trash", role: .destructive) { store.removeFromQueue(entry.id) }
         }
+    }
+
+    @ViewBuilder
+    private func queueRowBackground(_ state: String) -> some View {
+        if state == "Now Playing" {
+            VStack(spacing: 0) {
+                currentSongBoundary
+                Spacer(minLength: 0)
+                currentSongBoundary
+            }
+            .accessibilityHidden(true)
+        } else {
+            state == "Played" ? Color.gray.opacity(0.15) : Color.clear
+        }
+    }
+
+    private var currentSongBoundary: some View {
+        let opacity = colorContrast == .increased ? 0.5 : 0.28
+        return LinearGradient(colors: [.clear, .primary.opacity(opacity), .primary.opacity(opacity), .clear],
+                              startPoint: .leading, endPoint: .trailing)
+            .frame(height: 6)
+            .blur(radius: colorContrast == .increased ? 2 : 4)
+            .allowsHitTesting(false)
     }
 }
 
