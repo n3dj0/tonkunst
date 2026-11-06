@@ -36,6 +36,10 @@ struct AccountView: View {
         return "\(protocolSelection.rawValue.lowercased())://\(host):\(resolvedPort)"
     }
 
+    private var willDisconnect: Bool {
+        store.connectionEnabled && (store.connectionAvailable || store.isConnecting)
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -198,12 +202,40 @@ struct AccountView: View {
             }
 
             HStack(spacing: iconSpacing) {
-                Image(systemName: store.connectionAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .frame(width: iconColumnWidth, height: iconColumnWidth)
-                Text(store.listenStatus)
+                HStack(spacing: iconSpacing) {
+                    Image(systemName: store.connectionAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .frame(width: iconColumnWidth, height: iconColumnWidth)
+                    Text(store.listenStatus)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .foregroundStyle(store.connectionAvailable ? .green : .orange)
+                .accessibilityElement(children: .combine)
+
+                Spacer(minLength: 8)
+
+                Button {
+                    store.toggleConnection()
+                } label: {
+                    // Match Sign Out's footprint, including Dynamic Type and localization.
+                    Text("Sign Out")
+                        .hidden()
+                        .overlay {
+                            if store.isConnecting {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(systemName: store.connectionAvailable ? "wifi" : "wifi.slash")
+                            }
+                        }
+                }
+                .font(.subheadline.weight(.semibold))
+                .buttonStyle(.glass)
+                .tint(Color.primary)
+                .foregroundStyle(Color.primary)
+                .fixedSize()
+                .accessibilityLabel(willDisconnect ? "Disconnect from Jellyfin" : "Connect to Jellyfin")
+                .accessibilityValue(store.listenStatus)
             }
-            .foregroundStyle(store.connectionAvailable ? .green : .orange)
-            .accessibilityElement(children: .combine)
         }
 
         Section {
