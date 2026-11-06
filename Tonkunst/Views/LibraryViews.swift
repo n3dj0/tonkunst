@@ -17,7 +17,7 @@ struct LibraryView: View {
             OfflineView(showAccount: $showAccount).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Offline", systemImage: "iphone.gen3") }.tag(3)
             SearchView(showAccount: $showAccount).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(4)
         }
-        .connectionModeToast()
+        .connectionModeToast(isEnabled: !showAccount)
         .sheet(isPresented: $showPlayer) {
             NowPlayingView()
                 .environment(store)

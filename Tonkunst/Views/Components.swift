@@ -68,12 +68,13 @@ struct ConnectionPill: View {
 private struct ConnectionModeToastModifier: ViewModifier {
     @Environment(MusicStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let isEnabled: Bool
 
     func body(content: Content) -> some View {
         content
             .overlay(alignment: .top) {
                 ZStack {
-                    if let notice = store.connectionModeNotice {
+                    if isEnabled, let notice = store.connectionModeNotice {
                         Label(notice.title, systemImage: notice.systemImage)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
@@ -196,7 +197,9 @@ private struct AmbientRowsModifier: ViewModifier {
 }
 
 extension View {
-    func connectionModeToast() -> some View { modifier(ConnectionModeToastModifier()) }
+    func connectionModeToast(isEnabled: Bool = true) -> some View {
+        modifier(ConnectionModeToastModifier(isEnabled: isEnabled))
+    }
     func ambientRows() -> some View { modifier(AmbientRowsModifier()) }
     func ambientScreen() -> some View { modifier(AmbientScreenModifier()) }
 }
