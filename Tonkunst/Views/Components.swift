@@ -55,6 +55,51 @@ struct ConnectionPill: View {
     }
 }
 
+private struct ConnectionModeToastModifier: ViewModifier {
+    @EnvironmentObject private var store: MusicStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .top) {
+                ZStack {
+                    if let notice = store.connectionModeNotice {
+                        Label(notice.title, systemImage: notice.systemImage)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .labelStyle(ConnectionModeToastLabelStyle(isOnline: notice.isOnline))
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 14)
+                            .glassEffect(.regular, in: Capsule())
+                            .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
+                            .padding(.horizontal, 16)
+                            // Float below the navigation controls without moving the list.
+                            .padding(.top, 60)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(notice.title)
+                            .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+                            .id(notice.id)
+                    }
+                }
+                .allowsHitTesting(false)
+                .animation(.easeOut(duration: reduceMotion ? 0.15 : 0.25), value: store.connectionModeNotice)
+            }
+    }
+}
+
+private struct ConnectionModeToastLabelStyle: LabelStyle {
+    let isOnline: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 10) {
+            configuration.icon
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(isOnline ? .green : .orange)
+            configuration.title
+        }
+    }
+}
+
 // Shared by every screen and sheet; raw values are persisted across launches.
 enum AmbientStyle: String, CaseIterable {
     case standard, aurora, dusk, lagoon, ember
@@ -128,6 +173,7 @@ private struct AmbientRowsModifier: ViewModifier {
 }
 
 extension View {
+    func connectionModeToast() -> some View { modifier(ConnectionModeToastModifier()) }
     func ambientRows() -> some View { modifier(AmbientRowsModifier()) }
     func ambientScreen() -> some View { modifier(AmbientScreenModifier()) }
 }

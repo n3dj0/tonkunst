@@ -16,6 +16,7 @@ struct LibraryView: View {
             OfflineView(showAccount: $showAccount).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Offline", systemImage: "iphone.gen3") }.tag(3)
             SearchView(showAccount: $showAccount).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(4)
         }
+        .connectionModeToast()
         .sheet(isPresented: $showPlayer) {
             NowPlayingView()
                 .environmentObject(store)
@@ -372,6 +373,9 @@ struct QueueView: View {
                                 }
                                 ForEach(Array(store.queue.upcoming.reversed())) { entry in
                                     queueRow(entry, state: "Upcoming")
+                                        // Shared dividers must also be hidden on the neighboring row.
+                                        .listRowSeparator(store.queue.current != nil && entry.id == store.queue.upcoming.first?.id ? .hidden : .visible,
+                                                          edges: .bottom)
                                 }
                                 if let entry = store.queue.current {
                                     queueRow(entry, state: "Now Playing")
@@ -379,6 +383,8 @@ struct QueueView: View {
                                 }
                                 ForEach(store.queue.history) { entry in
                                     queueRow(entry, state: "Played")
+                                        .listRowSeparator(store.queue.current != nil && entry.id == store.queue.history.first?.id ? .hidden : .visible,
+                                                          edges: .top)
                                 }
                             }
                             .listStyle(.plain)

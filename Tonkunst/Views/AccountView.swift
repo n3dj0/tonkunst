@@ -63,6 +63,7 @@ struct AccountView: View {
                 }
             }
         }
+        .connectionModeToast()
     }
 
     @ViewBuilder

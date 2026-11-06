@@ -2,6 +2,15 @@ import AVFoundation
 import MediaPlayer
 import Network
 import SwiftUI
+import UIKit
+
+struct ConnectionModeNotice: Identifiable, Equatable {
+    let id = UUID()
+    let isOnline: Bool
+
+    var title: String { isOnline ? "Online Mode" : "Offline Mode" }
+    var systemImage: String { isOnline ? "wifi" : "wifi.slash" }
+}
 
 @MainActor
 final class MusicStore: NSObject, ObservableObject {
@@ -13,6 +22,7 @@ final class MusicStore: NSObject, ObservableObject {
     @Published var connectionAvailable = false
     @Published private(set) var connectionEnabled = true
     @Published private(set) var isConnecting = false
+    @Published private(set) var connectionModeNotice: ConnectionModeNotice?
     @Published var isLoading = false
     @Published private var manualRefreshAvailableDates: [String: Date] = [:]
     @Published private var libraryRefreshDates = UserDefaults.standard.dictionary(forKey: "tonkunst.libraryRefreshDates") as? [String: Date] ?? [:]
@@ -62,6 +72,7 @@ final class MusicStore: NSObject, ObservableObject {
     private let pathMonitorQueue = DispatchQueue(label: "com.tonkunst.network-path")
     private var isMonitoringNetwork = false
     private var serverHealthTask: Task<Void, Never>?
+    private var connectionNoticeTask: Task<Void, Never>?
     private var isUsingFallbackStream = false
     private var canUseFallbackStream = false
     private var hasFinishedPlayback = false
@@ -100,6 +111,7 @@ final class MusicStore: NSObject, ObservableObject {
     deinit {
         pathMonitor.cancel()
         serverHealthTask?.cancel()
+        connectionNoticeTask?.cancel()
         if let timeObserver { player?.removeTimeObserver(timeObserver) }
         if let didFinishObserver { NotificationCenter.default.removeObserver(didFinishObserver) }
         if let didFailToFinishObserver { NotificationCenter.default.removeObserver(didFailToFinishObserver) }
@@ -127,6 +139,7 @@ final class MusicStore: NSObject, ObservableObject {
         do {
             let authenticatedProfile = try await api.authenticate(server: server, username: username, password: password)
             savedProfiles = try KeychainStore.save(authenticatedProfile)
+            clearConnectionModeNotice()
             connectionGeneration += 1
             connectionEnabled = true
             UserDefaults.standard.set(true, forKey: Self.connectionEnabledKey)
@@ -194,6 +207,7 @@ final class MusicStore: NSObject, ObservableObject {
 
     func useSavedAccount(_ savedProfile: ServerProfile) {
         guard let savedProfile = savedProfiles.first(where: { $0.id == savedProfile.id }) else { return }
+        clearConnectionModeNotice()
         stop()
         serverHealthTask?.cancel()
         connectionGeneration += 1
@@ -215,6 +229,7 @@ final class MusicStore: NSObject, ObservableObject {
 
     func toggleConnection() {
         guard let profile else { return }
+        clearConnectionModeNotice()
 
         if connectionEnabled && (connectionAvailable || isConnecting) {
             connectionGeneration += 1
@@ -226,6 +241,7 @@ final class MusicStore: NSObject, ObservableObject {
             connectionAvailable = false
             isLoading = false
             if canUseFallbackStream && currentTrack != nil { stop() }
+            showConnectionModeNotice(isOnline: false)
         } else {
             connectionGeneration += 1
             connectionEnabled = true
@@ -238,9 +254,30 @@ final class MusicStore: NSObject, ObservableObject {
                 await refresh()
                 guard self.profile == profile, connectionEnabled, connectionGeneration == generation else { return }
                 isConnecting = false
+                showConnectionModeNotice(isOnline: connectionAvailable)
                 startConnectionMonitoring()
             }
         }
+    }
+
+    private func showConnectionModeNotice(isOnline: Bool) {
+        clearConnectionModeNotice()
+        let notice = ConnectionModeNotice(isOnline: isOnline)
+        connectionModeNotice = notice
+        UIAccessibility.post(notification: .announcement, argument: notice.title)
+        connectionNoticeTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(3)) }
+            catch { return }
+            guard let self, self.connectionModeNotice?.id == notice.id else { return }
+            self.connectionModeNotice = nil
+            self.connectionNoticeTask = nil
+        }
+    }
+
+    private func clearConnectionModeNotice() {
+        connectionNoticeTask?.cancel()
+        connectionNoticeTask = nil
+        connectionModeNotice = nil
     }
 
     func forgetSavedAccount(_ savedProfile: ServerProfile) {
@@ -253,6 +290,7 @@ final class MusicStore: NSObject, ObservableObject {
     }
 
     func signOut() {
+        clearConnectionModeNotice()
         stop()
         serverHealthTask?.cancel()
         connectionGeneration += 1
