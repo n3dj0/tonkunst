@@ -369,7 +369,6 @@ private struct QueueListRow: Identifiable {
 struct QueueView: View {
     @Environment(MusicStore.self) private var store
     @Environment(\.miniPlayerClearance) private var playerClearance
-    @Environment(\.colorSchemeContrast) private var colorContrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var showAccount: Bool
     @State private var isBrandVisible = true
@@ -466,15 +465,32 @@ struct QueueView: View {
         Button {
             selectQueueEntry(entry.id, proxy: proxy)
         } label: {
-            HStack(spacing: 12) {
-                Artwork(track: entry.track, size: 48)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(entry.track.title).fontWeight(state == .current ? .bold : .regular)
-                    Text("\(entry.track.artist) · \(state.title)").font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 8) {
+                if state == .current {
+                    HStack(spacing: 4) {
+                        Text(state.title)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Color(uiColor: .systemBackground))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color(uiColor: .secondaryLabel), in: RoundedRectangle(cornerRadius: 3))
+                            .layoutPriority(1)
+                        Color(uiColor: .secondaryLabel)
+                            .frame(height: 1)
+                            .accessibilityHidden(true)
+                    }
                 }
-                Spacer()
-                if store.offline.contains(entry.track) { OfflineBadge() }
-                Text(entry.track.formattedDuration).font(.caption.monospacedDigit())
+                HStack(spacing: 12) {
+                    Artwork(track: entry.track, size: 48)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(entry.track.title).fontWeight(state == .current ? .bold : .regular)
+                        Text(state == .current ? entry.track.artist : "\(entry.track.artist) · \(state.title)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if store.offline.contains(entry.track) { OfflineBadge() }
+                    Text(entry.track.formattedDuration).font(.caption.monospacedDigit())
+                }
             }
             .contentShape(Rectangle())
         }
@@ -513,12 +529,13 @@ struct QueueView: View {
     @ViewBuilder
     private func queueRowBackground(_ entry: QueueEntry, state: QueueRowState) -> some View {
         if state == .current {
-            VStack(spacing: 0) {
-                currentSongBoundary
-                Spacer(minLength: 0)
-                currentSongBoundary
-            }
-            .accessibilityHidden(true)
+            Color.clear
+                .overlay(alignment: .bottom) {
+                    Color(uiColor: .secondaryLabel)
+                        .frame(height: 1)
+                        .padding(.horizontal, 16)
+                }
+                .accessibilityHidden(true)
         } else {
             ZStack(alignment: .bottom) {
                 state == .played ? Color.gray.opacity(0.15) : Color.clear
@@ -530,15 +547,6 @@ struct QueueView: View {
                 }
             }
         }
-    }
-
-    private var currentSongBoundary: some View {
-        let opacity = colorContrast == .increased ? 0.5 : 0.28
-        return LinearGradient(colors: [.clear, .primary.opacity(opacity), .primary.opacity(opacity), .clear],
-                              startPoint: .leading, endPoint: .trailing)
-            .frame(height: 6)
-            .blur(radius: colorContrast == .increased ? 2 : 4)
-            .allowsHitTesting(false)
     }
 }
 
