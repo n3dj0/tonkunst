@@ -360,15 +360,34 @@ private enum QueueRowState {
     }
 }
 
+private struct QueueListRow: Identifiable {
+    let entry: QueueEntry
+    let state: QueueRowState
+    var id: UUID { entry.id }
+}
+
 struct QueueView: View {
     @Environment(MusicStore.self) private var store
     @Environment(\.miniPlayerClearance) private var playerClearance
     @Environment(\.colorSchemeContrast) private var colorContrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var showAccount: Bool
     @State private var isBrandVisible = true
+    @State private var selectionAnimationID: UUID?
 
     private var isEmpty: Bool {
         store.queue.current == nil && store.queue.history.isEmpty && store.queue.upcoming.isEmpty
+    }
+
+    private var rows: [QueueListRow] {
+        var rows = store.queue.upcoming.reversed().map { QueueListRow(entry: $0, state: .upcoming) }
+        if let entry = store.queue.current { rows.append(QueueListRow(entry: entry, state: .current)) }
+        rows += store.queue.history.map { QueueListRow(entry: $0, state: .played) }
+        return rows
+    }
+
+    private var queueMovementAnimation: Animation? {
+        reduceMotion ? nil : .smooth(duration: 0.45)
     }
 
     var body: some View {
@@ -390,20 +409,15 @@ struct QueueView: View {
                                             .listRowSeparator(.hidden)
                                             .listRowBackground(Color.clear)
                                     }
-                                    ForEach(Array(store.queue.upcoming.reversed())) { entry in
-                                        queueRow(entry, state: .upcoming)
-                                    }
-                                    if let entry = store.queue.current {
-                                        queueRow(entry, state: .current)
-                                            .id(entry.id)
-                                    }
-                                    ForEach(store.queue.history) { entry in
-                                        queueRow(entry, state: .played)
+                                    // One collection preserves each occurrence's identity as it moves between states.
+                                    ForEach(rows) { row in
+                                        queueRow(row.entry, state: row.state, proxy: proxy)
                                     }
                                 }
                                 .listSectionSeparator(.hidden, edges: .all)
                             }
                             .listStyle(.plain)
+                            .animation(queueMovementAnimation, value: store.queue.current?.id)
                             .contentMargins(.top, store.queue.upcoming.isEmpty ? 0 : max(0, geometry.size.height / 2 - 40), for: .scrollContent)
                             .contentMargins(.bottom, max(playerClearance, geometry.size.height / 2 - 40), for: .scrollContent)
                             .tonkunstBrandVisibility($isBrandVisible)
@@ -411,12 +425,12 @@ struct QueueView: View {
                                 if let id = store.queue.current?.id { proxy.scrollTo(id, anchor: .center) }
                             }
                             .onChange(of: store.queue.current?.id) { _, id in
-                                if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
+                                guard selectionAnimationID == nil, let id else { return }
+                                withAnimation(queueMovementAnimation) { proxy.scrollTo(id, anchor: .center) }
                             }
                             .onChange(of: store.queue.upcoming.isEmpty) { _, _ in
-                                if let id = store.queue.current?.id {
-                                    withAnimation { proxy.scrollTo(id, anchor: .center) }
-                                }
+                                guard selectionAnimationID == nil, let id = store.queue.current?.id else { return }
+                                withAnimation(queueMovementAnimation) { proxy.scrollTo(id, anchor: .center) }
                             }
                         }
                     }
@@ -448,9 +462,9 @@ struct QueueView: View {
         }
     }
 
-    private func queueRow(_ entry: QueueEntry, state: QueueRowState) -> some View {
+    private func queueRow(_ entry: QueueEntry, state: QueueRowState, proxy: ScrollViewProxy) -> some View {
         Button {
-            store.playFromQueue(entry.id)
+            selectQueueEntry(entry.id, proxy: proxy)
         } label: {
             HStack(spacing: 12) {
                 Artwork(track: entry.track, size: 48)
@@ -479,6 +493,20 @@ struct QueueView: View {
             Button("Move Down", systemImage: "arrow.down") { store.moveInQueue(entry.id, up: false) }
                 .disabled(!store.queue.canMove(entry.id, up: false))
             Button("Delete from Queue", systemImage: "trash", role: .destructive) { store.removeFromQueue(entry.id) }
+        }
+    }
+
+    private func selectQueueEntry(_ id: UUID, proxy: ScrollViewProxy) {
+        let animationID = UUID()
+        selectionAnimationID = animationID
+        withAnimation(queueMovementAnimation, completionCriteria: .removed) {
+            store.playFromQueue(id)
+        } completion: {
+            // A newer tap owns the final scroll if the user selects songs in quick succession.
+            guard selectionAnimationID == animationID else { return }
+            selectionAnimationID = nil
+            guard let currentID = store.queue.current?.id else { return }
+            withAnimation(queueMovementAnimation) { proxy.scrollTo(currentID, anchor: .center) }
         }
     }
 
