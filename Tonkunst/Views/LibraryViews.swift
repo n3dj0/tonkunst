@@ -264,21 +264,23 @@ struct ArtistsView: View {
                         NavigationLink {
                             ArtistTracksView(artist: artist.name)
                         } label: {
-                            HStack {
+                            HStack(spacing: MediaListLayout.spacing) {
                                 Circle()
                                     .fill(Color.accentColor.gradient)
-                                    .frame(width: 45, height: 45)
+                                    .frame(width: MediaListLayout.artworkSize, height: MediaListLayout.artworkSize)
                                     .overlay {
                                         Text(String(artist.name.prefix(1)))
                                             .font(.title3.weight(.bold))
                                             .foregroundStyle(Color(uiColor: .systemBackground))
                                     }
-                                Text(artist.name)
-                                Spacer()
+                                MarqueeText(text: artist.name, isActive: store.currentTrack?.artist == artist.name)
                                 Text("\(artist.tracks.count)")
                                     .foregroundStyle(.secondary)
+                                    .fixedSize()
                             }
+                            .mediaListRow()
                         }
+                        .listRowInsets(MediaListLayout.insets)
                     }
                 }
                 .ambientRows()
@@ -465,7 +467,7 @@ struct QueueView: View {
         Button {
             selectQueueEntry(entry.id, proxy: proxy)
         } label: {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
                 if state == .current {
                     HStack(spacing: 4) {
                         Text(state.title)
@@ -480,25 +482,20 @@ struct QueueView: View {
                             .accessibilityHidden(true)
                     }
                 }
-                HStack(spacing: 12) {
-                    Artwork(track: entry.track, size: 48)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(entry.track.title).fontWeight(state == .current ? .bold : .regular)
-                        Text(state == .current ? entry.track.artist : "\(entry.track.artist) · \(state.title)")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if store.offline.contains(entry.track) { OfflineBadge() }
-                    Text(entry.track.formattedDuration).font(.caption.monospacedDigit())
-                }
+                TrackRowLabel(track: entry.track,
+                              subtitle: state == .current ? entry.track.artist : "\(entry.track.artist) · \(state.title)",
+                              isOffline: store.offline.contains(entry.track),
+                              isActive: state == .current,
+                              titleWeight: state == .current ? .bold : .regular,
+                              isDurationSecondary: false)
             }
-            .contentShape(Rectangle())
+            .mediaListRow()
         }
         .buttonStyle(.plain)
         .disabled(!store.canPlay(entry.track))
         .accessibilityHint("Play this song from the beginning")
         .foregroundStyle(state == .played ? .secondary : .primary)
-        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+        .listRowInsets(MediaListLayout.insets)
         .listRowSeparator(.hidden, edges: .all)
         .listRowBackground(queueRowBackground(entry, state: state))
         .contextMenu {
@@ -542,7 +539,7 @@ struct QueueView: View {
                 // Own the dividers so neither neighbor can add a line against the current song.
                 if state == .played || store.queue.current == nil || entry.id != store.queue.upcoming.first?.id {
                     Divider()
-                        .padding(.leading, 16 + 48 + 12) // Row inset, artwork and spacing align it with the title.
+                        .padding(.leading, MediaListLayout.horizontalInset + MediaListLayout.artworkSize + MediaListLayout.spacing)
                         .padding(.trailing, 16)
                 }
             }

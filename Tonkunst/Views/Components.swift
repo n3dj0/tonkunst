@@ -15,6 +15,134 @@ struct Artwork: View {
 
 struct OfflineBadge: View { var body: some View { Image(systemName: "iphone.gen3").font(.caption.weight(.semibold)).foregroundStyle(.secondary).accessibilityLabel("Available offline") } }
 
+/// A single line that reels only for an active item whose text exceeds the available width.
+struct MarqueeText: View {
+    let text: String
+    var font: Font = .body
+    var isActive = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.layoutDirection) private var layoutDirection
+    @State private var textWidth: CGFloat = 0
+    @State private var availableWidth: CGFloat = 0
+    @State private var startedAt = Date()
+    @State private var isVisible = false
+
+    private var isScrolling: Bool {
+        isActive && availableWidth > 0 && textWidth > availableWidth + 1 && !reduceMotion && !voiceOverEnabled
+    }
+
+    private var label: some View {
+        Text(text.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " "))
+            .font(font)
+            .lineLimit(1)
+    }
+
+    var body: some View {
+        label
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .opacity(isScrolling ? 0 : 1)
+            .background {
+                label
+                    .fixedSize()
+                    .hidden()
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                        textWidth = width
+                        startedAt = .now
+                    }
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                availableWidth = width
+                startedAt = .now
+            }
+            .overlay(alignment: .leading) {
+                if isScrolling {
+                    TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !isVisible || scenePhase != .active)) { context in
+                        let gap: CGFloat = 32
+                        let distance = textWidth + gap
+                        let pause = 1.75
+                        let pointsPerSecond = 30.0
+                        let cycle = pause + Double(distance) / pointsPerSecond
+                        let elapsed = max(0, context.date.timeIntervalSince(startedAt))
+                            .truncatingRemainder(dividingBy: cycle)
+                        let offset = CGFloat(max(0, elapsed - pause) * pointsPerSecond)
+
+                        HStack(spacing: gap) {
+                            label
+                            label
+                        }
+                        .fixedSize()
+                        .offset(x: layoutDirection == .rightToLeft ? offset : -offset)
+                    }
+                }
+            }
+            .clipped()
+            .allowsHitTesting(false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(text))
+            .transaction { $0.animation = nil }
+            .onAppear {
+                startedAt = .now
+                isVisible = true
+            }
+            .onDisappear { isVisible = false }
+            .onChange(of: text) { _, _ in startedAt = .now }
+            .onChange(of: isScrolling) { _, _ in startedAt = .now }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { startedAt = .now }
+            }
+    }
+}
+
+enum MediaListLayout {
+    static let artworkSize: CGFloat = 48
+    static let spacing: CGFloat = 12
+    static let horizontalInset: CGFloat = 16
+    static let insets = EdgeInsets(top: 8, leading: horizontalInset, bottom: 8, trailing: horizontalInset)
+}
+
+private struct MediaListRowModifier: ViewModifier {
+    // Includes room for the Queue's status label without enlarging its current row.
+    @ScaledMetric(relativeTo: .body) private var contentHeight: CGFloat = 68
+
+    func body(content: Content) -> some View {
+        content
+            .frame(height: max(68, contentHeight))
+            .contentShape(Rectangle())
+    }
+}
+
+struct TrackRowLabel: View {
+    let track: MediaTrack
+    let subtitle: String
+    let isOffline: Bool
+    var isActive = false
+    var titleWeight: Font.Weight = .medium
+    var isDurationSecondary = true
+
+    var body: some View {
+        HStack(spacing: MediaListLayout.spacing) {
+            Artwork(track: track, size: MediaListLayout.artworkSize)
+            VStack(alignment: .leading, spacing: 3) {
+                MarqueeText(text: track.title, font: .body.weight(titleWeight), isActive: isActive)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if isOffline { OfflineBadge().fixedSize() }
+            Text(track.formattedDuration)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(isDurationSecondary ? .secondary : .primary)
+                .fixedSize()
+        }
+        .contentShape(Rectangle())
+    }
+}
+
 struct SongRow: View {
     @Environment(MusicStore.self) private var store
     let track: MediaTrack
@@ -23,9 +151,13 @@ struct SongRow: View {
         Button {
             if let action { action() } else { store.play(track) }
         } label: {
-            HStack(spacing: 12) { Artwork(track: track, size: 48); VStack(alignment: .leading, spacing: 3) { Text(track.title).font(.body.weight(.medium)).lineLimit(1); Text("\(track.artist) · \(track.album)").font(.caption).foregroundStyle(.secondary).lineLimit(1) }; Spacer(); if store.offline.contains(track) { OfflineBadge() }; Text(track.formattedDuration).font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
+            TrackRowLabel(track: track, subtitle: "\(track.artist) · \(track.album)",
+                          isOffline: store.offline.contains(track),
+                          isActive: store.currentTrack?.id == track.id)
+                .mediaListRow()
         }
         .buttonStyle(.plain)
+        .listRowInsets(MediaListLayout.insets)
         .disabled(!store.canPlay(track))
         .contextMenu {
             Button("Add to Queue", systemImage: "text.badge.plus") { store.addToQueue(track) }
@@ -197,6 +329,7 @@ private struct AmbientRowsModifier: ViewModifier {
 }
 
 extension View {
+    func mediaListRow() -> some View { modifier(MediaListRowModifier()) }
     func connectionModeToast(isEnabled: Bool = true) -> some View {
         modifier(ConnectionModeToastModifier(isEnabled: isEnabled))
     }
