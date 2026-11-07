@@ -16,7 +16,10 @@ struct ConnectionModeNotice: Identifiable, Equatable {
 final class MusicStore {
     private(set) var profile: ServerProfile?
     private(set) var savedProfiles: [ServerProfile] = []
-    private var cachedTracks: [MediaTrack] = []
+    private var cachedTracks: [MediaTrack] = [] {
+        didSet { cachedTracksRevision &+= 1 }
+    }
+    private var cachedTracksRevision = 0
     var currentTrack: MediaTrack? { queue.current?.track }
     var isPlaying: Bool { playback.isPlaying }
     private(set) var connectionAvailable = false
@@ -174,6 +177,20 @@ final class MusicStore {
     // Keep metadata for reconnection, but only expose playable songs to browsing.
     var tracks: [MediaTrack] { connectionAvailable ? cachedTracks : offlineTracks }
 
+    struct LibraryRevision: Equatable {
+        let cachedTracks: Int
+        let offlineTracks: Int
+        let isOnline: Bool
+    }
+
+    /// An inexpensive search invalidation key; comparing full track arrays on
+    /// every keystroke would put library-sized work back on the UI thread.
+    var libraryRevision: LibraryRevision {
+        LibraryRevision(cachedTracks: cachedTracksRevision,
+                        offlineTracks: offline.contentRevision,
+                        isOnline: connectionAvailable)
+    }
+
     func canPlay(_ track: MediaTrack) -> Bool {
         track.belongs(to: profile) && (offline.contains(track) || (connectionAvailable && track.streamURL != nil))
     }
@@ -189,7 +206,7 @@ final class MusicStore {
     var listenStatus: String {
         if profile != nil && !connectionEnabled { return String(localized: "Disconnected from Jellyfin", bundle: AppLocalization.bundle) }
         if isConnecting { return String(localized: "Connecting to Jellyfin…", bundle: AppLocalization.bundle) }
-        return connectionAvailable ? String(localized: "Connected to Jellyfin", bundle: AppLocalization.bundle) : (offlineTracks.isEmpty ? String(localized: "Jellyfin unavailable", bundle: AppLocalization.bundle) : String(localized: "Offline listening", bundle: AppLocalization.bundle))
+        return connectionAvailable ? String(localized: "Connected to Jellyfin", bundle: AppLocalization.bundle) : (offline.isEmpty ? String(localized: "Jellyfin unavailable", bundle: AppLocalization.bundle) : String(localized: "Offline listening", bundle: AppLocalization.bundle))
     }
 
     func signIn(server: String, username: String, password: String) async {

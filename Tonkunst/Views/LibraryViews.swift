@@ -5,17 +5,30 @@ struct LibraryView: View {
     @Environment(MusicStore.self) private var store
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab = 0
+    @State private var isSearchPresented = false
     @State private var showPlayer = false
     @State private var showAccount = false
     @State private var displayedError: String?
     @State private var isShowingError = false
+
+    private var tabSelection: Binding<Int> {
+        Binding {
+            selectedTab
+        } set: { tab in
+            // Activate search in the selection transaction, before its first
+            // layout, so field presentation and focus happen together.
+            isSearchPresented = tab == 4
+            selectedTab = tab
+        }
+    }
+
     var body: some View {
-        TabView(selection: $selectedTab) {
+        TabView(selection: tabSelection) {
             SongsView(showAccount: $showAccount).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Songs", systemImage: "music.note.list") }.tag(0)
             ArtistsView(showAccount: $showAccount).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Artists", systemImage: "person.2") }.tag(1)
             QueueView(showAccount: $showAccount).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Queue", systemImage: "music.note.list") }.tag(2)
             OfflineView(showAccount: $showAccount).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Offline", systemImage: "iphone.gen3") }.tag(3)
-            SearchView(showAccount: $showAccount).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(4)
+            SearchView(showAccount: $showAccount, isSearchPresented: $isSearchPresented, isActive: selectedTab == 4).miniPlayerContainer(expanded: $showPlayer).tabItem { Label("Search", systemImage: "magnifyingglass") }.tag(4)
         }
         .connectionModeToast(isEnabled: !showAccount)
         .sheet(isPresented: $showPlayer) {
@@ -599,49 +612,22 @@ struct OfflineView: View {
 }
 
 struct SearchView: View {
-    @Environment(MusicStore.self) private var store
     @Binding var showAccount: Bool
+    @Binding var isSearchPresented: Bool
+    let isActive: Bool
     @State private var query = ""
-    @FocusState private var isSearchFocused: Bool
-    
-    private var results: [MediaTrack] {
-        store.tracks.filter { $0.matches(query) }
-    }
 
     var body: some View {
         NavigationStack {
-            Group {
-                if query.isEmpty {
-                    ContentUnavailableView(
-                        "Search Your Music",
-                        systemImage: "magnifyingglass",
-                        description: Text("Find songs, artists and albums.")
-                    )
-                } else if results.isEmpty {
-                    ContentUnavailableView.search(text: query)
-                } else {
-                    List(results) { track in
-                        SongRow(track: track).ambientRows()
-                    }
-                        .listStyle(.plain)
-                        .miniPlayerScrollClearance()
-                }
-            }
+            SearchResultsView(query: query, isActive: isActive)
             .libraryHeaderSpacing()
             .ambientScreen()
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $query, prompt: String(localized: "Search your collection", bundle: AppLocalization.bundle))
+            .searchable(text: $query, isPresented: $isSearchPresented,
+                        placement: .navigationBarDrawer(displayMode: .always),
+                        prompt: String(localized: "Search your collection", bundle: AppLocalization.bundle))
             .searchPresentationToolbarBehavior(.avoidHidingContent)
-            .searchFocused($isSearchFocused)
-            .onAppear {
-                DispatchQueue.main.async {
-                    isSearchFocused = true
-                }
-            }
-            .onDisappear {
-                isSearchFocused = false
-            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     TonkunstBrand()
@@ -651,6 +637,67 @@ struct SearchView: View {
                     ConnectionPill()
                     AccountButton(showAccount: $showAccount)
                 }
+            }
+        }
+    }
+}
+
+private struct SearchResultsView: View {
+    @Environment(MusicStore.self) private var store
+    let query: String
+    let isActive: Bool
+    @State private var results: [MediaTrack] = []
+    @State private var completedRequest: Request?
+    @State private var snapshot: (revision: MusicStore.LibraryRevision, tracks: [MediaTrack])?
+
+    private struct Request: Equatable {
+        let query: String
+        let revision: MusicStore.LibraryRevision
+        let isActive: Bool
+    }
+
+    private var request: Request {
+        Request(query: query, revision: store.libraryRevision, isActive: isActive)
+    }
+
+    var body: some View {
+        let request = request
+        let hasCurrentResults = completedRequest == request
+        // Keep the search host mounted when moving between empty, loading and
+        // populated states, including during keyboard-driven layout changes.
+        List(hasCurrentResults ? results : []) { track in
+            SongRow(track: track).ambientRows()
+        }
+        .listStyle(.plain)
+        .miniPlayerScrollClearance()
+        .overlay {
+            if query.isEmpty {
+                ContentUnavailableView(
+                    "Search Your Music",
+                    systemImage: "magnifyingglass",
+                    description: Text("Find songs, artists and albums.")
+                )
+            } else if !hasCurrentResults {
+                ProgressView().accessibilityLabel(Text("Search"))
+            } else if results.isEmpty {
+                ContentUnavailableView.search(text: query)
+            }
+        }
+        .task(id: request) {
+            guard request.isActive, !request.query.isEmpty, !hasCurrentResults else { return }
+            // Only obtain a new library snapshot when its content changes. In
+            // offline mode, obtaining tracks also authorizes and sorts metadata.
+            if snapshot?.revision != request.revision {
+                snapshot = (request.revision, store.tracks)
+            }
+            guard let snapshot else { return }
+            do {
+                let matches = try await LibrarySearch.results(for: request.query, in: snapshot.tracks)
+                try Task.checkCancellation()
+                results = matches
+                completedRequest = request
+            } catch {
+                // A new query, library change or tab switch cancels obsolete work.
             }
         }
     }

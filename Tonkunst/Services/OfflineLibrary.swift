@@ -7,7 +7,10 @@ import Observation
 @Observable
 final class OfflineLibrary {
     typealias Download = @Sendable (URL) async throws -> (URL, URLResponse)
-    private var records: [String: OfflineRecord] = [:]
+    private var records: [String: OfflineRecord] = [:] {
+        didSet { contentRevision &+= 1 }
+    }
+    private(set) var contentRevision = 0
     private var activeProfile: ServerProfile?
     private var generation = 0
     private var revision = -1
@@ -17,6 +20,7 @@ final class OfflineLibrary {
     private let repository: OfflineRepository
     private(set) var unassignedDownloadCount = 0
 
+    var isEmpty: Bool { records.isEmpty }
     var downloaded: [String: URL] { records.mapValues(\.url) }
     var savedTracks: [String: MediaTrack] { records.mapValues(\.track) }
     var downloading: Set<String> { activeProfile.flatMap { pendingDownloads[$0.id] } ?? [] }

@@ -13,7 +13,8 @@ let package = Package(
             exclude: ["TonkunstApp.swift", "Info.plist", "Views", "Resources/Assets.xcassets", "Resources/PrivacyInfo.xcprivacy", "Resources/InfoPlist.xcstrings",
                       "Store/MusicStore.swift", "Services/KeychainStore.swift", "Services/SystemPlayback.swift"],
             sources: ["Models/MediaModels.swift", "Store/PlaybackQueue.swift",
-                      "Services/JellyfinAPI.swift", "Services/OfflineLibrary.swift", "Services/PlaybackController.swift"],
+                      "Services/JellyfinAPI.swift", "Services/OfflineLibrary.swift", "Services/PlaybackController.swift",
+                      "Services/LibrarySearch.swift"],
             resources: [.process("Resources/Localizable.xcstrings")]
         ),
         .testTarget(name: "TonkunstCoreTests", dependencies: ["TonkunstCore"], path: "Tests/CoreTests")

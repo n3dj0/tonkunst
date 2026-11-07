@@ -29,6 +29,14 @@ struct OfflineLibraryTests {
         let gate = DownloadGate(root: fixture.root)
         let library = OfflineLibrary(documentsRoot: fixture.root, defaults: fixture.defaults, profile: testProfile(), download: { try await gate.download($0) })
         let changed = Mutex(false)
+        #expect(library.isEmpty)
+        let initialRevision = library.contentRevision
+        let contentChanged = Mutex(false)
+        withObservationTracking {
+            _ = library.contentRevision
+        } onChange: {
+            contentChanged.withLock { $0 = true }
+        }
         withObservationTracking {
             _ = library.contains(testTrack())
         } onChange: {
@@ -37,17 +45,27 @@ struct OfflineLibraryTests {
         let first = Task { try await library.download(testTrack()) }
         await gate.waitUntilStarted()
         #expect(library.downloading == [testTrack().id])
+        #expect(library.contentRevision == initialRevision)
         try await library.download(testTrack())
         #expect(await gate.count == 1)
         await gate.release()
         try await first.value
         #expect(library.downloading.isEmpty)
         #expect(library.localURL(for: testTrack()) != nil)
+        #expect(!library.isEmpty)
         #expect(changed.withLock { $0 })
+        #expect(contentChanged.withLock { $0 })
+        #expect(library.contentRevision != initialRevision)
+        let downloadedRevision = library.contentRevision
         let metadata = try Data(contentsOf: fixture.root.appendingPathComponent("offline-library.json"))
         #expect(!String(decoding: metadata, as: UTF8.self).contains("secret"))
         try await library.remove(testTrack())
         #expect(!library.contains(testTrack()))
+        #expect(library.isEmpty)
+        #expect(library.contentRevision != downloadedRevision)
+        let removedRevision = library.contentRevision
+        library.selectAccount(nil)
+        #expect(library.contentRevision != removedRevision)
     }
 
     @Test func cancellationCleansTemporaryFileWithoutRetry() async throws {
