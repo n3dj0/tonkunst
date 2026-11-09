@@ -49,17 +49,19 @@ struct MiniPlayer: View {
 struct NowPlayingView: View {
     @Environment(MusicStore.self) private var store
     @Environment(\.dismiss) private var dismiss
+    @State private var sheetHeight: CGFloat = 600
 
     var body: some View {
         NavigationStack {
             GeometryReader { proxy in
+                let topInset = proxy.safeAreaInsets.top
                 ScrollView {
-                    VStack(spacing: 24) {
+                    VStack(spacing: 16) {
                         if let track = store.currentTrack {
-                            Artwork(track: track, size: max(0, min(proxy.size.width - 56, max(160, min(360, proxy.size.height * 0.4)))))
+                            Artwork(track: track, size: max(0, min(224, proxy.size.width - 48)))
                                 .shadow(color: .black.opacity(0.23), radius: 20, y: 10)
                                 .accessibilityHidden(true)
-                            VStack(spacing: 6) {
+                            VStack(spacing: 4) {
                                 Text(track.title).font(.title2.weight(.bold))
                                 Text(track.artist).foregroundStyle(.secondary)
                                 Text(track.album).font(.subheadline).foregroundStyle(.secondary)
@@ -72,8 +74,18 @@ struct NowPlayingView: View {
                             ContentUnavailableView("Nothing Playing", systemImage: "music.note")
                         }
                     }
-                    .padding(24)
-                    .frame(maxWidth: .infinity, minHeight: max(0, proxy.size.height))
+                    .frame(maxWidth: 420)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 12)
+                    .padding(.bottom, 20)
+                    .frame(maxWidth: .infinity)
+                    .onGeometryChange(for: CGFloat.self) { content in
+                        // Include the navigation bar; sheet detents already add the bottom safe area.
+                        // Artwork depends only on width so fitting the sheet cannot enlarge it again.
+                        (content.size.height + topInset).rounded(.up)
+                    } action: { height in
+                        sheetHeight = height
+                    }
                 }
                 .scrollBounceBehavior(.basedOnSize)
             }
@@ -94,10 +106,13 @@ struct NowPlayingView: View {
             .navigationTitle("Now Playing")
             .navigationBarTitleDisplayMode(.inline)
         }
+        .presentationDetents([.height(sheetHeight)])
+        .presentationDragIndicator(.visible)
+        .presentationContentInteraction(.resizes)
     }
 
     private var transportControls: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 8) {
             HStack(spacing: 32) {
                 Button { store.previous() } label: { Image(systemName: "backward.fill").frame(width: 44, height: 44) }
                     .accessibilityLabel("Previous track")

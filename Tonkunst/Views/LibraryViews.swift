@@ -34,8 +34,6 @@ struct LibraryView: View {
         .sheet(isPresented: $showPlayer) {
             NowPlayingView()
                 .environment(store)
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showAccount) {
             AccountView()
