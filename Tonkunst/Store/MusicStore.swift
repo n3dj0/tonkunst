@@ -106,7 +106,7 @@ final class MusicStore {
         guard !Task.isCancelled else { return }
         let generation = connectionGeneration
         defer { if connectionGeneration == generation { isRestoringSession = false } }
-        do { try await offline.restore() }
+        do { try await offline.restore(knownProfiles: savedProfiles) }
         catch { if connectionGeneration == generation { errorMessage = error.localizedDescription } }
         await queueSaveTask?.value
         guard connectionGeneration == generation else { return }

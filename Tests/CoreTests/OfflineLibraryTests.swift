@@ -7,17 +7,138 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct OfflineLibraryTests {
+    @Test func readablePathsHandleDuplicateTitlesAndKeepNamesAcrossRelaunches() async throws {
+        let fixture = try OfflineFixture()
+        defer { fixture.close() }
+        let source = ImmediateDownloads(root: fixture.root)
+        let library = OfflineLibrary(documentsRoot: fixture.root, defaults: fixture.defaults, profile: testProfile(),
+                                     download: { try await source.download($0) })
+        let first = testTrack("internal-first-id")
+        let second = testTrack("internal-second-id")
+        try await library.download(first)
+        try await library.download(second)
+        let firstURL = try #require(library.localURL(for: first))
+        let secondURL = try #require(library.localURL(for: second))
+        #expect(firstURL.path == fixture.root.appendingPathComponent("Accounts/Listener (music.example)/Artist/Album/Song.wav").path)
+        #expect(secondURL.lastPathComponent == "Song (2).wav")
+        // A missing file's name remains reserved until its old record is reconciled.
+        try FileManager.default.removeItem(at: firstURL)
+        let third = testTrack("internal-third-id")
+        try await library.download(third)
+        #expect(library.localURL(for: third)?.lastPathComponent == "Song (3).wav")
+        let restored = OfflineLibrary(documentsRoot: fixture.root, defaults: fixture.defaults, profile: testProfile(),
+                                      download: { try await source.download($0) })
+        try await restored.restore()
+        #expect(!restored.contains(first))
+        #expect(restored.localURL(for: second) == secondURL)
+        var retagged = second
+        retagged.title = "Changed title"
+        try await restored.download(retagged)
+        #expect(restored.localURL(for: second) == secondURL)
+        #expect(try Data(contentsOf: secondURL) == waveAudio())
+    }
+
+    @Test func accountsWithIdenticalReadableNamesStaySeparate() async throws {
+        let fixture = try OfflineFixture()
+        defer { fixture.close() }
+        let source = ImmediateDownloads(root: fixture.root)
+        var firstProfile = testProfile()
+        firstProfile.displayName = "../Listener/Name:"
+        var secondProfile = firstProfile
+        secondProfile.userID = "another-private-user-id"
+        var first = testTrack()
+        first.accountID = firstProfile.id
+        var second = first
+        second.accountID = secondProfile.id
+        let library = OfflineLibrary(documentsRoot: fixture.root, defaults: fixture.defaults, profile: firstProfile,
+                                     download: { try await source.download($0) })
+        try await library.download(first)
+        let firstURL = try #require(library.localURL(for: first))
+        library.selectAccount(secondProfile)
+        try await library.restore(knownProfiles: [firstProfile, secondProfile])
+        try await library.download(second)
+        let secondURL = try #require(library.localURL(for: second))
+        #expect(firstURL != secondURL)
+        #expect(firstURL.path.contains("Accounts/_Listener_Name_ (music.example)/"))
+        #expect(secondURL.path.contains("Accounts/_Listener_Name_ (music.example) (2)/"))
+        let restored = OfflineLibrary(documentsRoot: fixture.root, defaults: fixture.defaults, profile: firstProfile)
+        try await restored.restore(knownProfiles: [secondProfile])
+        #expect(restored.localURL(for: first) == firstURL)
+        #expect(try Data(contentsOf: secondURL) == waveAudio())
+    }
+
+    @Test func existingHashedFoldersMigrateAllAccountsWithoutOverwritingFiles() async throws {
+        let fixture = try OfflineFixture()
+        defer { fixture.close() }
+        var otherProfile = testProfile()
+        otherProfile.userID = "other-private-id"
+        otherProfile.displayName = "Other Listener"
+        var otherTrack = testTrack("other-song-id")
+        otherTrack.accountID = otherProfile.id
+        let first = testTrack("first-song-id")
+        let second = testTrack("second-song-id")
+        let oldURLs = try fixture.seedPreviousArchive([first, second, otherTrack])
+        let occupied = fixture.root.appendingPathComponent("Accounts/Listener (music.example)/personal.wav")
+        try FileManager.default.createDirectory(at: occupied.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("Personal file".utf8).write(to: occupied)
+        let library = OfflineLibrary(documentsRoot: fixture.root, defaults: fixture.defaults, profile: testProfile())
+        try await library.restore(knownProfiles: [otherProfile])
+        let firstURL = try #require(library.localURL(for: first))
+        let secondURL = try #require(library.localURL(for: second))
+        #expect(firstURL.path.contains("Accounts/Listener (music.example) (2)/"))
+        #expect(firstURL.lastPathComponent == "Song.wav")
+        #expect(secondURL.lastPathComponent == "Song (2).wav")
+        #expect(try Data(contentsOf: firstURL) == waveAudio())
+        #expect(try Data(contentsOf: secondURL) == waveAudio())
+        #expect(try Data(contentsOf: occupied) == Data("Personal file".utf8))
+        #expect(oldURLs.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) })
+        library.selectAccount(otherProfile)
+        try await library.restore()
+        let otherURL = try #require(library.localURL(for: otherTrack))
+        #expect(otherURL.path.contains("Accounts/Other Listener (music.example)/"))
+        #expect(otherURL.lastPathComponent == "Song.wav")
+        let restored = OfflineLibrary(documentsRoot: fixture.root, defaults: fixture.defaults, profile: testProfile())
+        try await restored.restore()
+        #expect(restored.localURL(for: first) == firstURL)
+        #expect(restored.localURL(for: second) == secondURL)
+    }
+
+    @Test func failedReadableMigrationRollsBackCopiesAndRetries() async throws {
+        let fixture = try OfflineFixture()
+        defer { fixture.close() }
+        let first = testTrack("first")
+        var second = testTrack("second")
+        second.artist = "Blocked Artist"
+        let oldURLs = try fixture.seedPreviousArchive([first, second], accountFolders: [testProfile().id: "Listener"])
+        let manifest = fixture.root.appendingPathComponent("offline-library.json")
+        let originalManifest = try Data(contentsOf: manifest)
+        let blocker = fixture.root.appendingPathComponent("Accounts/Listener/Blocked Artist")
+        try FileManager.default.createDirectory(at: blocker.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: blocker)
+        let library = OfflineLibrary(documentsRoot: fixture.root, defaults: fixture.defaults, profile: testProfile())
+        await #expect(throws: (any Error).self) { try await library.restore() }
+        #expect(try Data(contentsOf: manifest) == originalManifest)
+        for url in oldURLs { #expect(try Data(contentsOf: url) == waveAudio()) }
+        #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("Accounts/Listener/Artist/Album/Song.wav").path))
+        try FileManager.default.removeItem(at: blocker)
+        try await library.restore()
+        #expect(library.contains(first))
+        #expect(library.contains(second))
+        #expect(oldURLs.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) })
+    }
+
     @Test func legacyMetadataMigrationRemovesCredentials() async throws {
         let fixture = try OfflineFixture()
         defer { fixture.close() }
         let track = testTrack()
-        let audio = fixture.root.appendingPathComponent("old.wav")
+        let audio = fixture.root.appendingPathComponent("old.bin")
         try waveAudio().write(to: audio)
         fixture.defaults.set([track.id: audio.path], forKey: "offlineTrackManifest")
         fixture.defaults.set(try JSONEncoder().encode([track.id: track]), forKey: "offlineTrackMetadata")
         let library = OfflineLibrary(documentsRoot: fixture.root, defaults: fixture.defaults, profile: testProfile())
         try await library.restore()
         #expect(library.localURL(for: track) != nil)
+        #expect(library.localURL(for: track)?.pathExtension == "wav")
         let data = try Data(contentsOf: fixture.root.appendingPathComponent("offline-library.json"))
         #expect(!String(decoding: data, as: UTF8.self).contains("secret"))
         #expect(library.savedTracks[track.id]?.streamURL?.query == nil)
@@ -236,6 +357,8 @@ struct OfflineLibraryTests {
                                     manifestURL: blocked.appendingPathComponent("manifest.json"))
         await #expect(throws: (any Error).self) { try await failed.restore() }
         #expect(try Data(contentsOf: audio) == waveAudio())
+        #expect(try FileManager.default.subpathsOfDirectory(atPath: fixture.root.path)
+            .filter { $0.hasSuffix(".wav") } == ["legacy.wav"])
         #expect(fixture.defaults.data(forKey: "offlineTrackMetadata") != nil)
         let retry = OfflineLibrary(documentsRoot: fixture.root, defaults: fixture.defaults, profile: testProfile())
         try await retry.restore()
@@ -299,6 +422,29 @@ private struct OfflineFixture {
     func close() {
         defaults.removePersistentDomain(forName: suite)
         try? FileManager.default.removeItem(at: root)
+    }
+
+    func seedPreviousArchive(_ tracks: [MediaTrack], accountFolders: [String: String]? = nil) throws -> [URL] {
+        var accounts: [String: [String: Any]] = [:]
+        var urls: [URL] = []
+        for track in tracks {
+            let account = try #require(track.accountID)
+            // Reproduce the previous ID-based layout and archive, including relative paths.
+            let relative = "Accounts/\(account == testProfile().id ? String(repeating: "a", count: 64) : String(repeating: "b", count: 64))/Artist/Album/Song [\(track.id)].wav"
+            let url = root.appendingPathComponent(relative)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try waveAudio().write(to: url)
+            accounts[account, default: [:]][track.id] = [
+                "url": url.absoluteString,
+                "relativePath": relative,
+                "track": try JSONSerialization.jsonObject(with: JSONEncoder().encode(track.authorizing(with: nil)))
+            ]
+            urls.append(url)
+        }
+        var json: [String: Any] = ["accounts": accounts, "unassigned": [String: Any](), "migratedLegacy": true]
+        if let accountFolders { json["accountFolders"] = accountFolders }
+        try JSONSerialization.data(withJSONObject: json).write(to: root.appendingPathComponent("offline-library.json"))
+        return urls
     }
 }
 

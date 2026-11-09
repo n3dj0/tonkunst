@@ -10,7 +10,7 @@ Tonkunst is a native SwiftUI iPhone/iPad music client for a Jellyfin collection.
 - Connection status that changes from Jellyfin-connected to offline-only
 - Native `AVPlayer` playback, lock-screen controls, background audio, transport controls, shuffle, repeat, seek, and AirPlay
 - Jellyfin universal AAC/M4A playback URLs so files such as MP3, AAC, FLAC, M4A, and Opus can be served in an iOS-compatible form
-- Download/remove music for offline playback, stored in Files under **On My iPhone → Tonkunst → Accounts → account folder → Artist → Album**, with an `iphone.gen3` availability indicator. Each server/account has its own files and download index.
+- Download/remove music for offline playback, stored in Files under **On My iPhone → Tonkunst → Accounts → Account name (server) → Artist → Album → Song**, with an `iphone.gen3` availability indicator. Each server/account has its own files and download index. Folder and song names use readable labels; duplicate names get numbered suffixes instead of IDs.
 - Light and dark mode through SwiftUI’s system materials and semantic colors
 
 ## Run
@@ -30,6 +30,8 @@ Manual library refreshes have a 10-second cooldown after each attempt, including
 You can copy downloaded audio from Files. Keep the files in their Tonkunst folders if you want the app to continue playing them offline.
 
 Existing downloads migrate automatically when their saved metadata identifies their Jellyfin server and user. Migration copies audio before saving the new index, then removes the old copy after that save succeeds. Downloads whose account cannot be established remain in Files and are counted in Account & Settings; they are not assigned to the current account. Signing out hides that account's downloads in the app and preserves its files for the next sign-in. Download indexes use relative paths so iOS sandbox changes do not invalidate them.
+
+Existing ID-based account folders and song filenames upgrade to readable names on launch, including downloads belonging to other saved accounts. Account names include the server hostname, for example **Listener (music.example)**. Names remain stable after account or song metadata changes. Accounts with identical labels get separate numbered folders, and existing files are preserved if their names conflict. Migration keeps the original audio until the updated index is saved and can retry after a storage failure.
 
 Queue and offline-file persistence run in serial actors away from the UI thread. Queue saves are ordered and flushed when the app enters the background. A corrupt Queue archive is preserved as a backup and a fresh Queue can be saved. Filesystem and manifest errors are surfaced instead of reporting a successful download or deletion.
 

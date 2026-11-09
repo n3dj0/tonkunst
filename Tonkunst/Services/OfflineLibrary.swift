@@ -1,5 +1,4 @@
 import AVFoundation
-import CryptoKit
 import Foundation
 import Observation
 
@@ -51,9 +50,10 @@ final class OfflineLibrary {
     }
     func contains(_ track: MediaTrack) -> Bool { localURL(for: track) != nil }
 
-    func restore() async throws {
+    func restore(knownProfiles: [ServerProfile] = []) async throws {
         let generation = generation
         let snapshot = try await repository.restore(account: activeProfile?.id,
+            profiles: knownProfiles + [activeProfile].compactMap { $0 },
             legacyPaths: defaults.dictionary(forKey: "offlineTrackManifest") as? [String: String] ?? [:],
             legacyMetadata: defaults.data(forKey: "offlineTrackMetadata"))
         // Remove old plaintext values only after the new atomic archive is durable.
@@ -78,7 +78,7 @@ final class OfflineLibrary {
             staged = try await playableDownload(from: transcoded, suggestedExtension: "mp3")
         }
         // The repository consumes and cleans the staging file even if persistence fails.
-        let snapshot = try await repository.commit(staged.url, extension: staged.fileExtension, track: track, account: account)
+        let snapshot = try await repository.commit(staged.url, extension: staged.fileExtension, track: track, profile: profile)
         apply(snapshot, generation: generation)
     }
 
@@ -167,6 +167,8 @@ private actor OfflineRepository {
         var accounts: [String: [String: OfflineRecord]] = [:]
         var unassigned: [String: OfflineRecord] = [:]
         var migratedLegacy = false
+        // Ownership stays keyed by internal IDs; only these readable names enter Files.
+        var accountFolders: [String: String]?
     }
     private let files: OfflineFiles
     private let manifestURL: URL
@@ -179,7 +181,7 @@ private actor OfflineRepository {
             .appendingPathComponent("offline-library.json")
     }
 
-    func restore(account: String?, legacyPaths: [String: String], legacyMetadata: Data?) throws -> OfflineSnapshot {
+    func restore(account: String?, profiles: [ServerProfile], legacyPaths: [String: String], legacyMetadata: Data?) throws -> OfflineSnapshot {
         try prepare()
         guard var updated = archive else { throw CocoaError(.fileReadCorruptFile) }
         var migrationCopies: [(source: URL, destination: URL)] = []
@@ -198,36 +200,41 @@ private actor OfflineRepository {
                     track.accountID = owner
                     let ext = files.detectedAudioExtension(at: url) ?? url.pathExtension
                     track.fileExtension = ext
-                    var destination = url
-                    if let owner {
-                        let target = try files.destination(for: track, id: id, account: owner, fileExtension: ext)
-                        if target != url, !FileManager.default.fileExists(atPath: target.path) {
-                            // Copy first. Old paths remain valid until the archive is durable.
-                            try FileManager.default.copyItem(at: url, to: target)
-                            migrationCopies.append((url, target))
-                            destination = target
-                        }
-                    }
-                    let record = OfflineRecord(url: destination, track: track)
+                    let record = OfflineRecord(url: url, track: track)
                     if let owner { updated.accounts[owner, default: [:]][id] = record }
                     else { updated.unassigned[id] = record }
                 }
                 updated.migratedLegacy = true
             }
-            // Resolve container changes and external Files deletions on restoration.
-            if let account {
+            // Upgrade all saved accounts, including accounts that aren't currently selected.
+            // Copies remain reversible until the new paths are durably archived.
+            for account in updated.accounts.keys.sorted() {
+                let profile = profiles.last { $0.id == account }
+                let folder = try accountFolder(account, profile: profile, in: &updated)
+                let root = try files.accountDirectory(folder)
                 var valid: [String: OfflineRecord] = [:]
-                for (id, var record) in updated.accounts[account] ?? [:] {
-                    let path = record.relativePath.map { "Documents/" + $0 } ?? record.url.path
-                    guard let url = files.resolvedURL(for: path), !files.isHLSPlaylist(at: url) else { continue }
+                var reserved: Set<URL> = []
+                for (id, var record) in (updated.accounts[account] ?? [:]).sorted(by: { $0.key < $1.key }) {
+                    guard let url = resolvedURL(for: record), !files.isHLSPlaylist(at: url) else { continue }
                     record.url = url
+                    if !url.path.hasPrefix(root.path + "/") {
+                        let destination = try files.destination(for: record.track, accountFolder: folder,
+                            fileExtension: record.track.fileExtension, reserved: reserved)
+                        try files.copyForMigration(from: url, to: destination)
+                        migrationCopies.append((url, destination))
+                        record.url = destination
+                    }
                     valid[id] = record
+                    reserved.insert(record.url)
                 }
                 updated.accounts[account] = valid
             }
             try persist(updated)
         } catch {
-            for copy in migrationCopies { try? FileManager.default.removeItem(at: copy.destination) }
+            for copy in migrationCopies {
+                try? FileManager.default.removeItem(at: copy.destination)
+                files.removeEmptyFolders(startingAt: copy.destination.deletingLastPathComponent())
+            }
             throw error
         }
         let retainedURLs = Set(updated.accounts.values.flatMap { $0.values.map(\.url) } + updated.unassigned.values.map(\.url))
@@ -238,13 +245,24 @@ private actor OfflineRepository {
         return snapshot(account)
     }
 
-    func commit(_ staged: URL, extension ext: String, track: MediaTrack, account: String) throws -> OfflineSnapshot {
+    func commit(_ staged: URL, extension ext: String, track: MediaTrack, profile: ServerProfile) throws -> OfflineSnapshot {
         defer { try? FileManager.default.removeItem(at: staged) }
         try Task.checkCancellation()
         try prepare()
         guard var updated = archive else { throw CocoaError(.fileReadCorruptFile) }
-        let destination = try files.destination(for: track, account: account, fileExtension: ext)
-        let previous = updated.accounts[account]?[track.id]?.url
+        let account = profile.id
+        let folder = try accountFolder(account, profile: profile, in: &updated)
+        let root = try files.accountDirectory(folder)
+        let previous = updated.accounts[account]?[track.id].flatMap { resolvedURL(for: $0) }
+        let reserved = Set(try (updated.accounts[account] ?? [:]).filter { $0.key != track.id }
+            .values.map { try storedURL(for: $0) })
+        let destination: URL
+        if let previous, previous.path.hasPrefix(root.path + "/"), previous.pathExtension == ext {
+            // A re-download keeps its readable name, even if the tags have changed.
+            destination = previous
+        } else {
+            destination = try files.destination(for: track, accountFolder: folder, fileExtension: ext, reserved: reserved)
+        }
         var saved = track.authorizing(with: nil)
         saved.accountID = account
         saved.fileExtension = ext
@@ -312,6 +330,35 @@ private actor OfflineRepository {
         } else { archive = Archive() }
     }
 
+    private func storedURL(for record: OfflineRecord) throws -> URL {
+        if let path = record.relativePath { return try files.documentsDirectory().appendingPathComponent(path) }
+        return record.url
+    }
+
+    private func resolvedURL(for record: OfflineRecord) -> URL? {
+        files.resolvedURL(for: record.relativePath.map { "Documents/" + $0 } ?? record.url.path)
+    }
+
+    private func accountFolder(_ account: String, profile: ServerProfile?, in updated: inout Archive) throws -> String {
+        if let folder = updated.accountFolders?[account] { return folder }
+        let name = files.safeName(profile?.displayName ?? "Account", fallback: "Account", maxBytes: 80)
+        let server = profile?.normalizedBaseURL.map { url in
+            (url.host ?? "") + (url.port.map { " - \($0)" } ?? "")
+        }
+        let label = server.flatMap { $0.isEmpty ? nil : "\(name) (\($0))" } ?? name
+        let base = files.safeName(label, fallback: "Account", maxBytes: 180)
+        let reserved = Set((updated.accountFolders ?? [:]).values.map { $0.lowercased() })
+        let accountsRoot = try files.accountDirectory(base).deletingLastPathComponent()
+        var folder = base
+        var number = 2
+        while reserved.contains(folder.lowercased()) || FileManager.default.fileExists(atPath: accountsRoot.appendingPathComponent(folder).path) {
+            folder = "\(base) (\(number))"
+            number += 1
+        }
+        updated.accountFolders = (updated.accountFolders ?? [:]).merging([account: folder]) { _, new in new }
+        return folder
+    }
+
     private func persist(_ updated: Archive) throws {
         var updated = updated
         let root = try files.documentsDirectory().path + "/"
@@ -341,10 +388,6 @@ private actor OfflineRepository {
 private struct OfflineFiles: Sendable {
     let documentsRoot: URL?
 
-    static func folderID(_ account: String) -> String {
-        SHA256.hash(data: Data(account.utf8)).map { String(format: "%02x", $0) }.joined()
-    }
-
     /// The Documents root is shown as "On My iPhone → Tonkunst" in Files.
     func documentsDirectory() throws -> URL {
         let root = try documentsRoot ?? FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
@@ -352,19 +395,35 @@ private struct OfflineFiles: Sendable {
         return root
     }
 
-    func destination(for track: MediaTrack?, id: String? = nil, account: String? = nil, fileExtension: String) throws -> URL {
-        let artist = safeName(track?.artist ?? "Unknown Artist", fallback: "Unknown Artist", maxBytes: 100)
-        let album = safeName(track?.album ?? "Unknown Album", fallback: "Unknown Album", maxBytes: 100)
-        let title = safeName(track?.title ?? "Unknown Song", fallback: "Unknown Song", maxBytes: 100)
-        let trackID = safeName(id ?? track?.id ?? "Track", fallback: "Track", maxBytes: 64)
+    func accountDirectory(_ folder: String) throws -> URL {
+        try documentsDirectory().appendingPathComponent("Accounts", isDirectory: true)
+            .appendingPathComponent(folder, isDirectory: true)
+    }
+
+    func copyForMigration(from source: URL, to destination: URL) throws {
+        // A failed copy (for example, a full disk) must not leave a partial song in Files.
+        let staged = FileManager.default.temporaryDirectory.appendingPathComponent("tonkunst-migration-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: staged) }
+        try FileManager.default.copyItem(at: source, to: staged)
+        try FileManager.default.moveItem(at: staged, to: destination)
+    }
+
+    func destination(for track: MediaTrack, accountFolder: String, fileExtension: String, reserved: Set<URL>) throws -> URL {
+        let artist = safeName(track.artist, fallback: "Unknown Artist", maxBytes: 100)
+        let album = safeName(track.album, fallback: "Unknown Album", maxBytes: 100)
+        let title = safeName(track.title, fallback: "Unknown Song", maxBytes: 100)
         let ext = String(fileExtension.lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }.prefix(10))
-        let root = try documentsDirectory()
-        let accountRoot = account.map { root.appendingPathComponent("Accounts", isDirectory: true)
-            .appendingPathComponent(Self.folderID($0), isDirectory: true) } ?? root
-        let folder = accountRoot.appendingPathComponent(artist, isDirectory: true)
+        let folder = try accountDirectory(accountFolder).appendingPathComponent(artist, isDirectory: true)
             .appendingPathComponent(album, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        return folder.appendingPathComponent("\(title) [\(trackID)].\(ext.isEmpty ? "m4a" : ext)")
+        let suffix = ext.isEmpty ? "m4a" : ext
+        var destination = folder.appendingPathComponent("\(title).\(suffix)")
+        var number = 2
+        while reserved.contains(destination) || FileManager.default.fileExists(atPath: destination.path) {
+            destination = folder.appendingPathComponent("\(title) (\(number)).\(suffix)")
+            number += 1
+        }
+        return destination
     }
 
     func safeName(_ name: String, fallback: String, maxBytes: Int) -> String {
